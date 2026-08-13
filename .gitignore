@@ -1,0 +1,27 @@
+# Patterns are anchored with a leading slash on purpose. A bare `data/` would
+# also match `packages/arena_engine/data/`, which is source and must be tracked.
+/.venv/
+/data/
+/output/
+/logs/
+/.env
+/.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# Node / Next
+node_modules/
+/apps/dashboard/.next/
+/apps/dashboard/out/
+/apps/dashboard/node_modules/
+
+# OS
+.DS_Store

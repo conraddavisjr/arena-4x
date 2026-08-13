@@ -1,0 +1,80 @@
+[project]
+name = "arena-4x"
+version = "0.1.0"
+description = "A sandbox where four frontier LLMs compete in a turn-based 4X strategy game, with every prompt, reasoning payload, and state change recorded and replayable."
+requires-python = ">=3.11"
+
+# Deliberately empty. The root is a build and tooling anchor; real dependencies
+# live in the extras below, because the engine must be installable without any
+# LLM SDK at all. That is what lets the rules be tested in isolation and what
+# keeps `make test-engine` fast and offline.
+dependencies = []
+
+[project.optional-dependencies]
+# The game rules. No LLM SDK, no database, no web framework. If something in
+# here needs a network call, it is in the wrong package.
+engine = [
+    "pydantic>=2.7",
+    "numpy>=1.26",
+]
+
+# The agent loop. Carries all four provider SDKs, but none is imported unless
+# its engine is selected, so a missing xAI key cannot break an Anthropic-only
+# run. Same convention as ai-brain/packages/cos.
+orchestrator = [
+    "pydantic>=2.7",
+    "numpy>=1.26",
+    "httpx>=0.27",
+    "anthropic>=0.121",
+    "openai>=1.109",
+    "google-genai>=1.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "pyyaml>=6.0",
+]
+
+# The read side: REST history plus the WebSocket live feed.
+api = [
+    "pydantic>=2.7",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "websockets>=12.0",
+]
+
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["packages"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+# Editable installs make these look third-party to ruff, which then wants them
+# sorted in with pydantic and numpy. Naming them keeps our imports in their own
+# block.
+known-first-party = ["arena_engine", "arena_orchestrator", "arena_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# "packages" puts arena_engine and friends on the path; "." puts tests on it so
+# shared fixtures can be imported across test modules without a second copy
+# that can drift. Matches the ai-brain setup for the same reason.
+pythonpath = ["packages", "."]
+asyncio_mode = "auto"
