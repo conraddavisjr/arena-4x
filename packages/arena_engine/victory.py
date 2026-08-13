@@ -64,7 +64,7 @@ def score(state: State, player_id: str) -> int:
 
 
 def scores(state: State) -> dict[str, int]:
-    return {p: score(state, p) for p in state.player_ids()}
+    return {p: score(state, p) for p in state.civ_ids()}
 
 
 @register("conquest")
@@ -74,10 +74,12 @@ def _conquest(state: State) -> VictoryResult | None:
     Requires at least two civs to have started, so a single-player debug match
     does not instantly declare a winner on turn 1.
     """
-    if len(state.players) < 2:
+    if len(state.civ_ids()) < 2:
         return None
+    # Barbarians never hold a city - they sack and move on - so any city on the
+    # board belongs to a civ. Asserted in test_barbarians.py rather than assumed.
     holders = sorted({c.owner for _, c in sorted(state.cities.items())})
-    living = state.living_player_ids()
+    living = state.living_civ_ids()
     if len(living) == 1 and len(holders) <= 1:
         winner = living[0]
         return VictoryResult(
@@ -103,7 +105,7 @@ def _domination(state: State) -> VictoryResult | None:
         return None
 
     threshold = state.config.domination_threshold_pct
-    for player_id in state.player_ids():
+    for player_id in state.civ_ids():
         player = state.players[player_id]
         held = len(state.cities_of(player_id))
         if player.alive and held * 100 >= total * threshold:
@@ -132,7 +134,7 @@ def _science(state: State) -> VictoryResult | None:
     Two gates rather than one, so a runaway science civ still has to survive
     long enough to build it.
     """
-    for player_id in state.living_player_ids():
+    for player_id in state.living_civ_ids():
         player = state.players[player_id]
         if APEX_TECH not in player.known_techs:
             continue
@@ -159,7 +161,7 @@ def _turn_limit(state: State) -> VictoryResult | None:
     if state.turn < state.config.turn_limit:
         return None
     table = scores(state)
-    living = state.living_player_ids()
+    living = state.living_civ_ids()
     if not living:
         return VictoryResult(
             condition="turn_limit",

@@ -239,6 +239,10 @@ class Player(Model):
     tax_pct: int = 50
     science_pct: int = 50
     alive: bool = True
+    # The barbarian faction. Modelled as a player so units, combat and movement
+    # work unchanged, but it is not a civilisation: it never wins, never loses,
+    # never negotiates, and must be excluded from every victory calculation.
+    neutral: bool = False
     # Turn the civ was eliminated, for the post-game timeline.
     eliminated_turn: int | None = None
     memory: dict[str, RememberedTile] = Field(default_factory=dict)
@@ -357,6 +361,23 @@ class State(Model):
     def living_player_ids(self) -> list[str]:
         return [p for p in self.player_ids() if self.players[p].alive]
 
+    def civ_ids(self) -> list[str]:
+        """Real civilisations, excluding the neutral faction.
+
+        Anything that means "a rival" must use this rather than `player_ids`.
+        A victory condition that counted barbarians as a civ would never fire
+        conquest, and one that counted a razed barbarian holding as a city would
+        skew domination - both silently, with a plausible-looking result.
+        """
+        return [p for p in self.player_ids() if not self.players[p].neutral]
+
+    def living_civ_ids(self) -> list[str]:
+        return [p for p in self.civ_ids() if self.players[p].alive]
+
+    def is_neutral(self, player_id: str) -> bool:
+        player = self.players.get(player_id)
+        return player is not None and player.neutral
+
     def units_of(self, player_id: str) -> list[Unit]:
         return [u for _, u in sorted(self.units.items()) if u.owner == player_id]
 
@@ -380,7 +401,18 @@ class State(Model):
         return self.relations.get(pair_key(a, b), Relation())
 
     def at_war(self, a: str, b: str) -> bool:
-        return a != b and self.relation(a, b).state is RelationState.WAR
+        """Whether these two may attack each other.
+
+        The neutral faction is permanently hostile to everyone and cannot be
+        negotiated with, so it short-circuits the relation lookup entirely.
+        Routing it through `relation` would also raise on the pair key, since
+        there is no diplomatic record with a wolf.
+        """
+        if a == b:
+            return False
+        if self.is_neutral(a) or self.is_neutral(b):
+            return True
+        return self.relation(a, b).state is RelationState.WAR
 
     # -- identity ----------------------------------------------------------
 

@@ -15,7 +15,7 @@ orders still apply. A single bad order must never cost an agent its whole turn.
 
 from __future__ import annotations
 
-from arena_engine import combat, diplomacy, economy, movement, victory, visibility
+from arena_engine import barbarians, combat, diplomacy, economy, movement, victory, visibility
 from arena_engine import events as ev
 from arena_engine import hex as hx
 from arena_engine.actions import Action
@@ -85,6 +85,7 @@ def new_match(
             )
             state.next_id += 1
 
+    barbarians.ensure_faction(state)
     report = visibility.compute(state)
     visibility.apply(state, report)
     return state, [ev.event(0, ev.TURN_STARTED, f"Match {match_id} begins", seed=seed)]
@@ -114,6 +115,11 @@ def step(state: State, actions: dict[str, Action]) -> tuple[State, list[Event]]:
         for single in action.orders:
             _apply_order(s, player_id, single, out)
 
+    # The wilderness acts after every civ, so raiders react to where armies
+    # actually ended the turn rather than where they began it.
+    barbarians.spawn(s, out)
+    barbarians.take_turn(s, out)
+
     _end_turn(s, out)
     _refresh_vision(s, out)
     _check_elimination(s, out)
@@ -137,7 +143,7 @@ def step(state: State, actions: dict[str, Action]) -> tuple[State, list[Event]]:
 
 def _rotation(state: State) -> list[str]:
     """Player order for this turn, rotating so first strike moves around."""
-    living = state.living_player_ids()
+    living = state.living_civ_ids()
     if not living:
         return []
     shift = state.turn % len(living)
@@ -175,7 +181,7 @@ def _begin_turn(s: State, out: list[Event]) -> None:
 
 
 def _end_turn(s: State, out: list[Event]) -> None:
-    for player_id in s.player_ids():
+    for player_id in s.civ_ids():
         player = s.players[player_id]
         if not player.alive:
             continue
@@ -338,7 +344,9 @@ def _refresh_vision(s: State, out: list[Event]) -> None:
 
 
 def _check_elimination(s: State, out: list[Event]) -> None:
-    for player_id in s.player_ids():
+    # Civs only: the wilderness is never "eliminated", it just happens to have
+    # no units for a while until the next spawn.
+    for player_id in s.civ_ids():
         player = s.players[player_id]
         if not player.alive:
             continue
@@ -420,7 +428,12 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
         match item.action:
             case "send_message":
                 target = item.to if item.channel == "private" else None
-                if item.channel == "private" and (target not in s.players or target == player_id):
+                # `target not in s.players` is not enough: the wilderness *is*
+                # a player, so without the neutral check an agent could open a
+                # private channel with a wolf pack and have it accepted.
+                if item.channel == "private" and (
+                    target not in s.players or target == player_id or s.is_neutral(target)
+                ):
                     _reject(s, out, player_id, "send_message", f"unknown recipient {item.to!r}")
                     continue
                 diplomacy.send_message(s, player_id, item.channel, item.text, target)
@@ -436,8 +449,8 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                     )
                 )
             case "propose":
-                if item.to not in s.players or item.to == player_id:
-                    _reject(s, out, player_id, "propose", f"unknown recipient {item.to!r}")
+                if item.to not in s.players or item.to == player_id or s.is_neutral(item.to):
+                    _reject(s, out, player_id, "propose", f"cannot negotiate with {item.to!r}")
                     continue
                 p = diplomacy.open_proposal(
                     s, player_id, item.to, item.type, item.terms, item.message
@@ -473,8 +486,8 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                 for e in results:
                     out.append(ev.event(s.turn, e.kind, e.detail, actor=e.actor, other=e.other))
             case "declare_war":
-                if item.on not in s.players or item.on == player_id:
-                    _reject(s, out, player_id, "declare_war", f"unknown target {item.on!r}")
+                if item.on not in s.players or item.on == player_id or s.is_neutral(item.on):
+                    _reject(s, out, player_id, "declare_war", f"cannot declare war on {item.on!r}")
                     continue
                 for e in diplomacy.declare_war(s, player_id, item.on):
                     out.append(
@@ -942,7 +955,7 @@ def legal_actions(state: State, player_id: str) -> dict:
             "embarked": unit.embarked,
         }
 
-    others = [p for p in state.player_ids() if p != player_id and state.players[p].alive]
+    others = [p for p in state.civ_ids() if p != player_id and state.players[p].alive]
     return {
         "units": units,
         "cities": {

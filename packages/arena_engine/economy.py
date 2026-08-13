@@ -18,6 +18,7 @@ from arena_engine.content import (
     BUILDINGS,
     CITY_WORK_RADIUS,
     IMPROVEMENTS,
+    NEUTRAL_UNITS,
     RESOURCE_YIELDS,
     TERRAIN,
     UNITS,
@@ -154,6 +155,13 @@ def can_build_unit(state: State, city: City, unit_type: UT) -> bool:
     necessarily this city's. That is what makes losing an iron hill matter at
     the empire level rather than just locally.
     """
+    # Wildlife belongs to the wilderness. Without this the unit table's neutral
+    # entries fall straight through into `buildable`, and a civ is offered a
+    # wolf pack as a construction option - they have cost 0, so it would even
+    # have completed instantly.
+    if unit_type in NEUTRAL_UNITS:
+        return False
+
     spec = UNITS[unit_type]
     player = state.players[city.owner]
     if spec.req_tech is not None and spec.req_tech not in player.known_techs:

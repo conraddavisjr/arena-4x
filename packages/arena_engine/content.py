@@ -33,6 +33,8 @@ class Resource(StrEnum):
     IRON = "iron"
     HORSES = "horses"
     GOLD_ORE = "gold_ore"
+    DEER = "deer"
+    FISH = "fish"
 
 
 class Improvement(StrEnum):
@@ -111,6 +113,10 @@ RESOURCE_YIELDS: dict[Resource, Yields] = {
     Resource.IRON: Yields(production=2),
     Resource.HORSES: Yields(production=1, food=1),
     Resource.GOLD_ORE: Yields(gold=3),
+    # Game. Makes forest worth settling rather than merely worth chopping, and
+    # gives the wilderness something to offer besides danger.
+    Resource.DEER: Yields(food=2),
+    Resource.FISH: Yields(food=2, gold=1),
 }
 
 RESOURCE_TERRAIN: dict[Resource, frozenset[Terrain]] = {
@@ -118,6 +124,8 @@ RESOURCE_TERRAIN: dict[Resource, frozenset[Terrain]] = {
     Resource.IRON: frozenset({Terrain.HILLS, Terrain.MOUNTAINS, Terrain.DESERT}),
     Resource.HORSES: frozenset({Terrain.PLAINS, Terrain.GRASSLAND}),
     Resource.GOLD_ORE: frozenset({Terrain.HILLS, Terrain.DESERT, Terrain.MOUNTAINS}),
+    Resource.DEER: frozenset({Terrain.FOREST, Terrain.GRASSLAND}),
+    Resource.FISH: frozenset({Terrain.COAST, Terrain.OCEAN}),
 }
 
 # Strategic resources gate units. A civ with no iron in its borders cannot build
@@ -222,6 +230,9 @@ APEX_TECH = "apex_theory"
 
 
 class UnitType(StrEnum):
+    # Neutral. Owned by the barbarian faction, never by a civ.
+    WOLF = "wolf"
+    BARBARIAN = "barbarian"
     TRIREME = "trireme"
     SETTLER = "settler"
     WORKER = "worker"
@@ -256,6 +267,13 @@ class UnitSpec:
 
 
 UNITS: dict[UnitType, UnitSpec] = {
+    # Wildlife. Fast and weak: a real threat to a lone scout, settler or worker,
+    # and nothing at all to a fortified garrison. Its job is to make the empty
+    # map dangerous enough that expansion is a decision rather than a formality.
+    UnitType.WOLF: UnitSpec(cost=0, attack=5, defense=3, moves=2, vision=2, can_embark=False),
+    # Raiders. Slower and much heavier, and they march on cities. Their job is
+    # to make military spending rational before the first civ is ever sighted.
+    UnitType.BARBARIAN: UnitSpec(cost=0, attack=9, defense=7, moves=1, vision=2, can_embark=False),
     # The only true sea unit. Fast and cheap, and decisively stronger than
     # anything embarked, so an amphibious invasion that sails unescorted is a
     # real gamble rather than a free flanking move.
@@ -311,6 +329,20 @@ UNITS: dict[UnitType, UnitSpec] = {
         siege_pct=100,
     ),
 }
+
+# ---------------------------------------------------------------------------
+# The neutral faction
+#
+# Barbarians are modelled as a player so that unit ownership, combat, movement
+# and rendering all work unchanged. Everything that means "a civilisation" must
+# therefore ask for civs specifically - victory conditions above all, which is
+# where treating a neutral as a rival would silently corrupt the result.
+# ---------------------------------------------------------------------------
+
+BARBARIAN_ID = "barbarians"
+BARBARIAN_NAME = "Wilderness"
+NEUTRAL_UNITS: frozenset[UnitType] = frozenset({UnitType.WOLF, UnitType.BARBARIAN})
+
 
 # What embarking costs. A unit at sea is in transit, not in a fight: it cannot
 # attack at all, and it defends at a fraction of its strength. That asymmetry is

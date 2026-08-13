@@ -270,7 +270,7 @@ def _order_soldier(  # noqa: ANN001
     state: State, player_id: str, unit, options: dict, out: list[Order], claimed: set[str]
 ) -> None:
     """Garrison the nearest city, or march on a rival once at war."""
-    enemies = [p for p in state.player_ids() if p != player_id and state.at_war(player_id, p)]
+    enemies = [p for p in state.civ_ids() if p != player_id and state.at_war(player_id, p)]
     if enemies:
         target = _nearest_enemy_city(state, unit.hex, enemies)
         moves = _free_moves(options, claimed)
@@ -401,7 +401,7 @@ def _order_research(state: State, player_id: str, legal: dict, out: list[Order])
 
 
 def all_bot_actions(state: State) -> dict[str, Action]:
-    return {p: act(state, p) for p in state.living_player_ids()}
+    return {p: act(state, p) for p in state.living_civ_ids()}
 
 
 def passable_neighbors(state: State, h: Hex) -> list[Hex]:

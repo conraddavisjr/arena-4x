@@ -105,7 +105,12 @@ def compute(state: State) -> VisionReport:
     Sorted iteration throughout: the sightings list ends up in the event log,
     and an unordered one would make replays differ from live runs.
     """
-    visibility: dict[str, set[Hex]] = {p: set() for p in state.living_player_ids()}
+    # Civs only. The neutral faction needs no fog of its own - its behaviour is
+    # local and does not consult a visibility set - and including it would put
+    # "you can see a wolf" into the civ-to-civ contact matrix, which is meant to
+    # answer who has sighted whom. Barbarian units remain visible on the map
+    # like any other occupant; they simply never register as diplomatic contact.
+    visibility: dict[str, set[Hex]] = {p: set() for p in state.living_civ_ids()}
 
     for _, unit in sorted(state.units.items()):
         if unit.owner not in visibility:
