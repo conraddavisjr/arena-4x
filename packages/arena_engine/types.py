@@ -79,6 +79,9 @@ class Unit(Model):
     hp: int = 100
     moves_left: int = 0
     fortified: bool = False
+    # At sea. A land unit that embarked is a sea unit for movement and combat
+    # until it lands again; it is never cargo inside another unit.
+    embarked: bool = False
     # Worker state. `work_turns_left` counts down only while the worker stays
     # put; moving cancels the job, which is checked in the reducer.
     working_on: Improvement | None = None

@@ -39,6 +39,21 @@ class Improvement(StrEnum):
     FARM = "farm"
     MINE = "mine"
     ROAD = "road"
+    FISHING_BOATS = "fishing_boats"
+
+
+class Domain(StrEnum):
+    """Where a unit can go.
+
+    Land units may enter water only while embarked (see `Unit.embarked`), which
+    is the Civ-5 model: the unit itself becomes a sea unit rather than being
+    loaded as cargo into a transport. That avoids one unit containing another,
+    and with it the position coupling, referential integrity, and death-cascade
+    invariants that a cargo model would have to hold in every code path.
+    """
+
+    LAND = "land"
+    SEA = "sea"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,17 +79,21 @@ class Yields:
 @dataclass(frozen=True, slots=True)
 class TerrainSpec:
     yields: Yields
-    passable: bool  # to land units
+    passable: bool  # to land units on foot
     settleable: bool
     move_cost: int
     defense_pct: int  # percentage bonus to a defender standing here
+    navigable: bool = False  # to sea units and embarked land units
+
+    def open_to(self, domain: Domain) -> bool:
+        return self.navigable if domain is Domain.SEA else self.passable
 
 
 TERRAIN: dict[Terrain, TerrainSpec] = {
-    # Water is workable by an adjacent city but land units cannot enter it and
-    # cities cannot be founded on it. There are no boats in v1.
-    Terrain.OCEAN: TerrainSpec(Yields(food=1, gold=1), False, False, 1, 0),
-    Terrain.COAST: TerrainSpec(Yields(food=2, gold=2), False, False, 1, 0),
+    # Water is workable by an adjacent coastal city and navigable by sea units
+    # and embarked land units. Cities still cannot be founded on it.
+    Terrain.OCEAN: TerrainSpec(Yields(food=1, gold=1), False, False, 1, 0, navigable=True),
+    Terrain.COAST: TerrainSpec(Yields(food=2, gold=2), False, False, 1, 0, navigable=True),
     # Grassland feeds, plains balance, forest and hills produce and defend.
     Terrain.GRASSLAND: TerrainSpec(Yields(food=3), True, True, 1, 0),
     Terrain.PLAINS: TerrainSpec(Yields(food=1, production=2, gold=1), True, True, 1, 0),
@@ -126,7 +145,19 @@ IMPROVEMENTS: dict[Improvement, ImprovementSpec] = {
         frozenset(t for t in Terrain if TERRAIN[t].passable),
         2,
     ),
+    # Worked by a coastal city, not built by a worker: water tiles are why a
+    # seaside site is worth founding at all.
+    Improvement.FISHING_BOATS: ImprovementSpec(
+        Yields(food=1, gold=1), frozenset({Terrain.COAST, Terrain.OCEAN}), 4
+    ),
 }
+
+# Improvements a worker can build by standing on the tile. Fishing boats are
+# excluded because workers cannot walk on water; they are placed by a coastal
+# city when it works the tile.
+WORKER_IMPROVEMENTS: frozenset[Improvement] = frozenset(
+    {Improvement.FARM, Improvement.MINE, Improvement.ROAD}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +188,10 @@ TECHS: dict[str, TechSpec] = {
     "animal_husbandry": TechSpec(2, ERA_COST[2], ("agriculture",)),
     "bronze_working": TechSpec(2, ERA_COST[2], ("mining",)),
     "writing": TechSpec(2, ERA_COST[2], ("pottery",)),
+    # Gates both embarkation and the trireme. Deliberately era 2 and cheap: the
+    # ocean is a third to a half of every map, and leaving it unreachable until
+    # late would waste most of the board for most of the match.
+    "sailing": TechSpec(2, ERA_COST[2], ("pottery",)),
     "masonry": TechSpec(2, ERA_COST[2], ("mining",)),
     # Era 3
     "horseback_riding": TechSpec(3, ERA_COST[3], ("animal_husbandry",)),
@@ -187,6 +222,7 @@ APEX_TECH = "apex_theory"
 
 
 class UnitType(StrEnum):
+    TRIREME = "trireme"
     SETTLER = "settler"
     WORKER = "worker"
     SCOUT = "scout"
@@ -213,9 +249,27 @@ class UnitSpec:
     # Percentage bonus when attacking a city. Catapults exist to break stacks
     # that fortified archers would otherwise make unassailable.
     siege_pct: int = 0
+    domain: Domain = Domain.LAND
+    # Land units can embark onto water once the civ has sailing. Settlers and
+    # workers can too, which is what makes island settlement possible.
+    can_embark: bool = True
 
 
 UNITS: dict[UnitType, UnitSpec] = {
+    # The only true sea unit. Fast and cheap, and decisively stronger than
+    # anything embarked, so an amphibious invasion that sails unescorted is a
+    # real gamble rather than a free flanking move.
+    UnitType.TRIREME: UnitSpec(
+        cost=30,
+        attack=10,
+        defense=8,
+        moves=4,
+        vision=3,
+        upkeep=1,
+        req_tech="sailing",
+        domain=Domain.SEA,
+        can_embark=False,
+    ),
     UnitType.SETTLER: UnitSpec(cost=30, attack=0, defense=1, moves=2, vision=2, civilian=True),
     UnitType.WORKER: UnitSpec(cost=20, attack=0, defense=1, moves=2, vision=1, civilian=True),
     UnitType.SCOUT: UnitSpec(cost=15, attack=1, defense=2, moves=3, vision=3),
@@ -257,6 +311,15 @@ UNITS: dict[UnitType, UnitSpec] = {
         siege_pct=100,
     ),
 }
+
+# What embarking costs. A unit at sea is in transit, not in a fight: it cannot
+# attack at all, and it defends at a fraction of its strength. That asymmetry is
+# the whole tension of a naval invasion - the crossing is the vulnerable part.
+EMBARKED_DEFENSE_PCT = 35
+EMBARKED_MOVES = 3
+# Techs that unlock crossing water at all.
+EMBARK_TECH = "sailing"
+
 
 # Spearmen counter horsemen, the one hard rock-paper-scissors edge in the game.
 # Without it a horseback-riding rush is close to unanswerable.

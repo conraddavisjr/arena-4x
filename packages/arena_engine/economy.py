@@ -21,6 +21,7 @@ from arena_engine.content import (
     RESOURCE_YIELDS,
     TERRAIN,
     UNITS,
+    Domain,
     Yields,
     food_to_grow,
     tech_cost,
@@ -157,6 +158,10 @@ def can_build_unit(state: State, city: City, unit_type: UT) -> bool:
     player = state.players[city.owner]
     if spec.req_tech is not None and spec.req_tech not in player.known_techs:
         return False
+    # Ships need a coastline. Without this an inland capital could field a navy,
+    # which would make coastal sites worthless to settle.
+    if spec.domain is Domain.SEA and not is_coastal(state, city):
+        return False
     if spec.req_resource is not None:
         owned = any(
             tile.owner == city.owner and tile.resource == spec.req_resource
@@ -165,6 +170,14 @@ def can_build_unit(state: State, city: City, unit_type: UT) -> bool:
         if not owned:
             return False
     return True
+
+
+def is_coastal(state: State, city: City) -> bool:
+    """Whether the city touches navigable water."""
+    return any(
+        (tile := state.at(n)) is not None and TERRAIN[tile.terrain].navigable
+        for n in hx.neighbors(city.hex)
+    )
 
 
 def can_build_building(state: State, city: City, name: str) -> bool:
