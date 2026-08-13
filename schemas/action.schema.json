@@ -1,0 +1,629 @@
+{
+  "$defs": {
+    "Attack": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "attack",
+          "title": "Action",
+          "type": "string"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "unit_id": {
+          "title": "Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "target",
+        "unit_id"
+      ],
+      "title": "Attack",
+      "type": "object"
+    },
+    "BuildImprovement": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "build_improvement",
+          "title": "Action",
+          "type": "string"
+        },
+        "improvement": {
+          "enum": [
+            "farm",
+            "mine",
+            "road"
+          ],
+          "title": "Improvement",
+          "type": "string"
+        },
+        "unit_id": {
+          "title": "Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "improvement",
+        "unit_id"
+      ],
+      "title": "BuildImprovement",
+      "type": "object"
+    },
+    "DeclareWar": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "declare_war",
+          "title": "Action",
+          "type": "string"
+        },
+        "casus_belli": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Casus Belli"
+        },
+        "on": {
+          "title": "On",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "casus_belli",
+        "on"
+      ],
+      "title": "DeclareWar",
+      "type": "object"
+    },
+    "Dossier": {
+      "additionalProperties": false,
+      "description": "The agent's self-authored memory.\n\nThe engine stores this and hands it back verbatim next turn. It never edits\nthe content; the only thing it may do is truncate an oversized one, and it\nemits `dossier_truncated` when it does so the loss is visible in the log\nrather than silent.",
+      "properties": {
+        "doctrine": {
+          "title": "Doctrine",
+          "type": "string"
+        },
+        "lessons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Lessons",
+          "type": "array"
+        },
+        "opponent_models": {
+          "items": {
+            "$ref": "#/$defs/OpponentModel"
+          },
+          "title": "Opponent Models",
+          "type": "array"
+        },
+        "standing_commitments": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Standing Commitments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "doctrine",
+        "lessons",
+        "opponent_models",
+        "standing_commitments"
+      ],
+      "title": "Dossier",
+      "type": "object"
+    },
+    "Fortify": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "fortify",
+          "title": "Action",
+          "type": "string"
+        },
+        "unit_id": {
+          "title": "Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "unit_id"
+      ],
+      "title": "Fortify",
+      "type": "object"
+    },
+    "FoundCity": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "found_city",
+          "title": "Action",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "unit_id": {
+          "title": "Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "name",
+        "unit_id"
+      ],
+      "title": "FoundCity",
+      "type": "object"
+    },
+    "MoveUnit": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "move_unit",
+          "title": "Action",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        },
+        "unit_id": {
+          "title": "Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "to",
+        "unit_id"
+      ],
+      "title": "MoveUnit",
+      "type": "object"
+    },
+    "OpponentModel": {
+      "additionalProperties": false,
+      "properties": {
+        "assessed_intent": {
+          "title": "Assessed Intent",
+          "type": "string"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Notes"
+        },
+        "player_id": {
+          "title": "Player Id",
+          "type": "string"
+        },
+        "trustworthiness": {
+          "$ref": "#/$defs/Trustworthiness"
+        }
+      },
+      "required": [
+        "assessed_intent",
+        "notes",
+        "player_id",
+        "trustworthiness"
+      ],
+      "title": "OpponentModel",
+      "type": "object"
+    },
+    "ProposalType": {
+      "enum": [
+        "peace",
+        "alliance",
+        "ceasefire",
+        "non_aggression",
+        "trade"
+      ],
+      "title": "ProposalType",
+      "type": "string"
+    },
+    "Propose": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "propose",
+          "title": "Action",
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message"
+        },
+        "terms": {
+          "$ref": "#/$defs/Terms"
+        },
+        "to": {
+          "title": "To",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ProposalType"
+        }
+      },
+      "required": [
+        "action",
+        "message",
+        "terms",
+        "to",
+        "type"
+      ],
+      "title": "Propose",
+      "type": "object"
+    },
+    "Reasoning": {
+      "additionalProperties": false,
+      "description": "Captured before the action payload, per the chain-of-thought requirement.\n\nFree text, deliberately. The point of the lab is to read what the model\nactually thought, so imposing structure here would launder exactly the\nsignal we are trying to observe.",
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Confidence"
+        },
+        "plan_this_turn": {
+          "title": "Plan This Turn",
+          "type": "string"
+        },
+        "situation_assessment": {
+          "title": "Situation Assessment",
+          "type": "string"
+        },
+        "threats_and_opportunities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Threats And Opportunities",
+          "type": "array"
+        }
+      },
+      "required": [
+        "confidence",
+        "plan_this_turn",
+        "situation_assessment",
+        "threats_and_opportunities"
+      ],
+      "title": "Reasoning",
+      "type": "object"
+    },
+    "RespondToProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "respond_to_proposal",
+          "title": "Action",
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message"
+        },
+        "proposal_id": {
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "response": {
+          "enum": [
+            "accept",
+            "reject"
+          ],
+          "title": "Response",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "message",
+        "proposal_id",
+        "response"
+      ],
+      "title": "RespondToProposal",
+      "type": "object"
+    },
+    "SendMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "send_message",
+          "title": "Action",
+          "type": "string"
+        },
+        "channel": {
+          "enum": [
+            "public",
+            "private"
+          ],
+          "title": "Channel",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "To"
+        }
+      },
+      "required": [
+        "action",
+        "channel",
+        "text",
+        "to"
+      ],
+      "title": "SendMessage",
+      "type": "object"
+    },
+    "SetProduction": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "set_production",
+          "title": "Action",
+          "type": "string"
+        },
+        "city_id": {
+          "title": "City Id",
+          "type": "string"
+        },
+        "item": {
+          "title": "Item",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "city_id",
+        "item"
+      ],
+      "title": "SetProduction",
+      "type": "object"
+    },
+    "SetRates": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "set_rates",
+          "title": "Action",
+          "type": "string"
+        },
+        "science_pct": {
+          "title": "Science Pct",
+          "type": "integer"
+        },
+        "tax_pct": {
+          "title": "Tax Pct",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action",
+        "science_pct",
+        "tax_pct"
+      ],
+      "title": "SetRates",
+      "type": "object"
+    },
+    "SetResearch": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "set_research",
+          "title": "Action",
+          "type": "string"
+        },
+        "tech": {
+          "title": "Tech",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "tech"
+      ],
+      "title": "SetResearch",
+      "type": "object"
+    },
+    "Terms": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_turns": {
+          "title": "Duration Turns",
+          "type": "integer"
+        },
+        "gold_to_them": {
+          "title": "Gold To Them",
+          "type": "integer"
+        },
+        "gold_to_you": {
+          "title": "Gold To You",
+          "type": "integer"
+        },
+        "tech_to_them": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tech To Them"
+        },
+        "tech_to_you": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tech To You"
+        }
+      },
+      "required": [
+        "duration_turns",
+        "gold_to_them",
+        "gold_to_you",
+        "tech_to_them",
+        "tech_to_you"
+      ],
+      "title": "Terms",
+      "type": "object"
+    },
+    "Trustworthiness": {
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        "unknown"
+      ],
+      "title": "Trustworthiness",
+      "type": "string"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "One agent's complete output for one turn.",
+  "properties": {
+    "diplomacy": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "declare_war": "#/$defs/DeclareWar",
+            "propose": "#/$defs/Propose",
+            "respond_to_proposal": "#/$defs/RespondToProposal",
+            "send_message": "#/$defs/SendMessage"
+          },
+          "propertyName": "action"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/SendMessage"
+          },
+          {
+            "$ref": "#/$defs/Propose"
+          },
+          {
+            "$ref": "#/$defs/RespondToProposal"
+          },
+          {
+            "$ref": "#/$defs/DeclareWar"
+          }
+        ]
+      },
+      "title": "Diplomacy",
+      "type": "array"
+    },
+    "dossier": {
+      "$ref": "#/$defs/Dossier"
+    },
+    "orders": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "attack": "#/$defs/Attack",
+            "build_improvement": "#/$defs/BuildImprovement",
+            "fortify": "#/$defs/Fortify",
+            "found_city": "#/$defs/FoundCity",
+            "move_unit": "#/$defs/MoveUnit",
+            "set_production": "#/$defs/SetProduction",
+            "set_rates": "#/$defs/SetRates",
+            "set_research": "#/$defs/SetResearch"
+          },
+          "propertyName": "action"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/MoveUnit"
+          },
+          {
+            "$ref": "#/$defs/Attack"
+          },
+          {
+            "$ref": "#/$defs/Fortify"
+          },
+          {
+            "$ref": "#/$defs/FoundCity"
+          },
+          {
+            "$ref": "#/$defs/BuildImprovement"
+          },
+          {
+            "$ref": "#/$defs/SetProduction"
+          },
+          {
+            "$ref": "#/$defs/SetResearch"
+          },
+          {
+            "$ref": "#/$defs/SetRates"
+          }
+        ]
+      },
+      "title": "Orders",
+      "type": "array"
+    },
+    "reasoning": {
+      "$ref": "#/$defs/Reasoning"
+    }
+  },
+  "required": [
+    "diplomacy",
+    "dossier",
+    "orders",
+    "reasoning"
+  ],
+  "title": "ARENA-4X agent action",
+  "type": "object"
+}
