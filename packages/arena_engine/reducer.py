@@ -102,6 +102,7 @@ def step(state: State, actions: dict[str, Action]) -> tuple[State, list[Event]]:
         action = actions.get(player_id)
         if action is None or not s.players[player_id].alive:
             continue
+        _log_reasoning(s, player_id, action, out)
         _store_dossier(s, player_id, action, out)
         _apply_diplomacy(s, player_id, action, out)
 
@@ -339,6 +340,35 @@ def _check_elimination(s: State, out: list[Event]) -> None:
 # ---------------------------------------------------------------------------
 # Diplomacy
 # ---------------------------------------------------------------------------
+
+
+def _log_reasoning(s: State, player_id: str, action: Action, out: list[Event]) -> None:
+    """Record what the agent said it was thinking, before anything is applied.
+
+    Emitted by the engine rather than only by the orchestrator so that a bot
+    match produces a fully watchable, fully exportable replay with no API calls
+    at all. That is what lets the viewer and the published-match bundle be built
+    and tested end to end before the first dollar is spent on a model.
+
+    The orchestrator adds the expensive half around this - the exact prompt, the
+    raw response, token usage - which stays in Postgres and is deliberately kept
+    out of the published bundle.
+    """
+    r = action.reasoning
+    out.append(
+        ev.event(
+            s.turn,
+            ev.AGENT_ACTION,
+            r.plan_this_turn or f"{s.players[player_id].civ_name} acted",
+            actor=player_id,
+            situation_assessment=r.situation_assessment,
+            threats_and_opportunities=r.threats_and_opportunities,
+            plan_this_turn=r.plan_this_turn,
+            confidence=r.confidence,
+            order_count=len(action.orders),
+            diplomacy_count=len(action.diplomacy),
+        )
+    )
 
 
 def _store_dossier(s: State, player_id: str, action: Action, out: list[Event]) -> None:

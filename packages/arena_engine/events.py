@@ -68,6 +68,8 @@ PACT_EXPIRED = "pact_expired"
 FIRST_CONTACT = "first_contact"
 CONTACT_LOST = "contact_lost"
 
+AGENT_ACTION = "agent_action"
+
 PLAYER_ELIMINATED = "player_eliminated"
 DOSSIER_TRUNCATED = "dossier_truncated"
 
