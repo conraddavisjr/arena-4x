@@ -18,15 +18,19 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/BufferGeometryUtils.js";
 
 export const HEX = 1;
-// Vertical relief. Mountains are tall enough to genuinely hide what is behind
-// them, which is the whole reason the camera orbits.
+// Relief. The steps between bands are deliberately large: at a low camera
+// angle the side wall of each column is what reads as a cliff or a shoreline,
+// and small differences flatten into nothing.
 export const HEIGHT = {
-  ocean: 0.06, coast: 0.16, desert: 0.34, plains: 0.36,
-  grassland: 0.38, forest: 0.42, hills: 0.78, mountains: 1.5,
+  ocean: 0.10, coast: 0.28, desert: 0.60, plains: 0.62,
+  grassland: 0.64, forest: 0.66, hills: 1.05, mountains: 1.95,
 };
+// Ground colours, pushed apart so terrain type reads instantly at a distance -
+// the thing a flat palette loses first. Sand is genuinely pale, ocean genuinely
+// deep, grassland and forest clearly different greens rather than two shades.
 export const GROUND = {
-  ocean: 0x1d4d7a, coast: 0x2f7fa8, grassland: 0x5f9e42, plains: 0xb9a75c,
-  forest: 0x3d7a3f, hills: 0x8d7a4e, desert: 0xd8c078, mountains: 0x6e6d74,
+  ocean: 0x11395f, coast: 0x2f86ad, grassland: 0x54963a, plains: 0xc0aa5a,
+  forest: 0x2f6b34, hills: 0x8a7346, desert: 0xe4cf90, mountains: 0x74737c,
 };
 export const CIV_COLOURS = [0x4ade80, 0xfbbf24, 0x38bdf8, 0xf472b6];
 export const WILD_COLOUR = 0x9aa0aa;
@@ -46,8 +50,16 @@ export function buildTerrain(tiles, terrain) {
   // A single instanced hex column for the entire board. Height and colour come
   // from the per-instance matrix and colour buffer, so eight terrain types cost
   // one draw call rather than eight.
-  const geo = cyl(HEX * 0.98, HEX * 0.98, 1, 6);
-  geo.rotateY(Math.PI / 6);
+  //
+  // Radius exactly HEX and *no* rotation, which is what makes the board a solid
+  // surface instead of scattered tiles. three.js puts a cylinder's first vertex
+  // at +Z, so a six-sided cylinder is already pointy-top - the orientation this
+  // axial layout is spaced for. The earlier `rotateY(PI/6)` turned every column
+  // flat-top while the spacing stayed pointy-top, so neighbours overlapped
+  // along one axis and left gaps along the others. That mismatch, not the
+  // radius, is what produced the broken-honeycomb look with dark voids between
+  // tiles. At radius HEX with no rotation the seam is exactly zero.
+  const geo = cyl(HEX, HEX, 1, 6);
   const mesh = new THREE.InstancedMesh(
     geo,
     new THREE.MeshLambertMaterial({ flatShading: true }),

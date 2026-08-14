@@ -221,7 +221,10 @@ async function drawTurn() {
   // from any angle without hiding the terrain under it.
   const claimed = owners.map((o, i) => (o && (!lit || lit.has(i)) ? i : -1)).filter((i) => i >= 0);
   if (claimed.length) {
-    const geo = new THREE.CylinderGeometry(0.99, 0.99, 0.04, 6).rotateY(Math.PI / 6);
+    // Same orientation rule as the terrain: pointy-top, full radius, no
+    // rotation. Slightly inset so a border reads as a claim painted on the
+    // tile rather than a second tile stacked on top of it.
+    const geo = new THREE.CylinderGeometry(0.92, 0.92, 0.05, 6);
     const mesh = instanced(geo, claimed.length, { transparent: true, opacity: 0.34 });
     claimed.forEach((i, n) => {
       const [x, , z] = at(i);
