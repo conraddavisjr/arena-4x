@@ -140,9 +140,7 @@ def test_start_templates_never_overlap() -> None:
 def test_extreme_start_fractions_are_clamped_not_obeyed() -> None:
     """A configuration that would break fairness must be corrected, not honoured."""
     m = mapgen.generate(1, radius=20, start_radius_fraction=0.01)
-    closest = min(
-        hx.distance(a, b) for i, a in enumerate(m.starts) for b in m.starts[i + 1 :]
-    )
+    closest = min(hx.distance(a, b) for i, a in enumerate(m.starts) for b in m.starts[i + 1 :])
     assert closest >= mapgen.MIN_START_SEPARATION
 
 

@@ -23,7 +23,7 @@ from arena_engine.actions import (
     SetResearch,
     pass_turn,
 )
-from arena_engine.content import MIN_CITY_SPACING, Terrain, UnitType
+from arena_engine.content import MIN_CITY_SPACING, NEUTRAL_UNITS, Terrain, UnitType
 from arena_engine.reducer import legal_actions, new_match, step
 from arena_engine.types import MatchConfig, ProposalType, RelationState, State, Terms, Unit
 
@@ -139,7 +139,8 @@ def test_new_match_gives_every_civ_the_same_opening() -> None:
     state = fresh(21)
     counts = {p: len(state.units_of(p)) for p, _ in ROSTER}
     assert len(set(counts.values())) == 1, f"unequal starting units: {counts}"
-    assert len(set(pl.gold for pl in state.players.values())) == 1
+    # Civs only: the neutral faction is a player but starts with nothing.
+    assert len({state.players[p].gold for p in state.civ_ids()}) == 1
 
 
 def test_starting_units_are_not_all_stacked() -> None:
@@ -530,8 +531,11 @@ def test_buildable_items_are_actually_affordable_to_start() -> None:
     actions["p1"] = Action(orders=[FoundCity(action="found_city", unit_id=settler.id, name="X")])
     state, _ = step(state, actions)
     city = state.cities_of("p1")[0]
-    for item in economy.buildable(state, city):
-        assert economy.build_cost(item) > 0
+    options = economy.buildable(state, city)
+    for item in options:
+        assert economy.build_cost(item) > 0, f"{item} is free to build"
+    # Wildlife has cost 0 and must never be offered to a civ at all.
+    assert not (set(options) & {u.value for u in NEUTRAL_UNITS})
 
 
 # ---------------------------------------------------------------------------

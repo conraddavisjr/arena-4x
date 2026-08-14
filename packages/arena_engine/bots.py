@@ -58,6 +58,11 @@ BUILDING_ORDER = [
 # Best military unit available, strongest first.
 MILITARY_ORDER = ["swordsman", "horseman", "archer", "spearman", "warrior"]
 
+# Kept out of MILITARY_ORDER so triremes are built as a deliberate minority
+# rather than crowding out the army the moment a city touches the coast.
+NAVY = "trireme"
+NAVY_PER_CITIES = 4
+
 # Target city count before a civ stops making settlers, and the garrison it
 # wants per city before it builds anything else.
 TARGET_CITIES = 7
@@ -137,6 +142,15 @@ def _order_units(state: State, player_id: str, legal: dict, out: list[Order]) ->
         if options is None:
             continue
 
+        # At sea is the worst place to be caught, so always look for a landing.
+        if unit.embarked and unit.type is not UnitType.SETTLER:
+            ashore = _free_moves_from(options, "disembark", claimed_tiles)
+            if ashore:
+                step = sorted(ashore)[0]
+                claimed_tiles.add(step)
+                out.append(MoveUnit(action="move_unit", unit_id=unit.id, to=step))
+                continue
+
         if unit.type is UnitType.SETTLER:
             _order_settler(state, unit, options, out, claimed_tiles)
         elif unit.type is UnitType.WORKER:
@@ -154,7 +168,11 @@ def _order_units(state: State, player_id: str, legal: dict, out: list[Order]) ->
 
 def _free_moves(options: dict, claimed: set[str]) -> list[str]:
     """Moves not already taken by another unit of ours this turn."""
-    return [m for m in options["move"] if m not in claimed]
+    return _free_moves_from(options, "move", claimed)
+
+
+def _free_moves_from(options: dict, key: str, claimed: set[str]) -> list[str]:
+    return [m for m in options.get(key, []) if m not in claimed]
 
 
 def _order_settler(  # noqa: ANN001
@@ -169,6 +187,16 @@ def _order_settler(  # noqa: ANN001
     if best is not None:
         claimed.add(best)
         out.append(MoveUnit(action="move_unit", unit_id=unit.id, to=best))
+        return
+    # Nowhere worth going on foot. Put to sea and look for open land elsewhere,
+    # which is the whole reason embarkation exists.
+    overseas = _free_moves_from(options, "embark", claimed) or _free_moves_from(
+        options, "disembark", claimed
+    )
+    if overseas:
+        step = sorted(overseas)[0]
+        claimed.add(step)
+        out.append(MoveUnit(action="move_unit", unit_id=unit.id, to=step))
     elif options["found_city"]:
         out.append(FoundCity(action="found_city", unit_id=unit.id, name=""))
 
@@ -242,7 +270,7 @@ def _order_soldier(  # noqa: ANN001
     state: State, player_id: str, unit, options: dict, out: list[Order], claimed: set[str]
 ) -> None:
     """Garrison the nearest city, or march on a rival once at war."""
-    enemies = [p for p in state.player_ids() if p != player_id and state.at_war(player_id, p)]
+    enemies = [p for p in state.civ_ids() if p != player_id and state.at_war(player_id, p)]
     if enemies:
         target = _nearest_enemy_city(state, unit.hex, enemies)
         moves = _free_moves(options, claimed)
@@ -282,6 +310,7 @@ def _order_cities(state: State, player_id: str, legal: dict, out: list[Order]) -
         "settler": sum(1 for u in units if u.type is UnitType.SETTLER),
         "worker": sum(1 for u in units if u.type is UnitType.WORKER),
         "military": sum(1 for u in units if not UNITS[u.type].civilian),
+        "navy": sum(1 for u in units if u.type is UnitType.TRIREME),
     }
     cities = state.cities_of(player_id)
 
@@ -295,7 +324,10 @@ def _order_cities(state: State, player_id: str, legal: dict, out: list[Order]) -
         out.append(SetProduction(action="set_production", city_id=city.id, item=want))
         # Count the decision immediately, or every city in the empire decides
         # to build the same settler on the same turn.
-        if want in counts:
+        if want == NAVY:
+            counts["navy"] += 1
+            counts["military"] += 1
+        elif want in counts:
             counts[want] += 1
         elif want in _MILITARY_NAMES:
             counts["military"] += 1
@@ -339,6 +371,10 @@ def _wanted(
         if best:
             return best
 
+    # A token navy on the coast, to exercise naval combat and screen crossings.
+    if NAVY in options and counts.get("navy", 0) < max(1, city_count // NAVY_PER_CITIES):
+        return NAVY
+
     # The science victory, the moment it becomes reachable.
     if "apex_project" in options:
         return "apex_project"
@@ -365,7 +401,7 @@ def _order_research(state: State, player_id: str, legal: dict, out: list[Order])
 
 
 def all_bot_actions(state: State) -> dict[str, Action]:
-    return {p: act(state, p) for p in state.living_player_ids()}
+    return {p: act(state, p) for p in state.living_civ_ids()}
 
 
 def passable_neighbors(state: State, h: Hex) -> list[Hex]:

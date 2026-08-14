@@ -15,7 +15,7 @@ orders still apply. A single bad order must never cost an agent its whole turn.
 
 from __future__ import annotations
 
-from arena_engine import combat, diplomacy, economy, victory, visibility
+from arena_engine import barbarians, combat, diplomacy, economy, movement, victory, visibility
 from arena_engine import events as ev
 from arena_engine import hex as hx
 from arena_engine.actions import Action
@@ -26,6 +26,7 @@ from arena_engine.content import (
     TERRAIN,
     UNITS,
     WONDERS,
+    WORKER_IMPROVEMENTS,
     Improvement,
     UnitType,
     available_techs,
@@ -84,6 +85,7 @@ def new_match(
             )
             state.next_id += 1
 
+    barbarians.ensure_faction(state)
     report = visibility.compute(state)
     visibility.apply(state, report)
     return state, [ev.event(0, ev.TURN_STARTED, f"Match {match_id} begins", seed=seed)]
@@ -113,6 +115,11 @@ def step(state: State, actions: dict[str, Action]) -> tuple[State, list[Event]]:
         for single in action.orders:
             _apply_order(s, player_id, single, out)
 
+    # The wilderness acts after every civ, so raiders react to where armies
+    # actually ended the turn rather than where they began it.
+    barbarians.spawn(s, out)
+    barbarians.take_turn(s, out)
+
     _end_turn(s, out)
     _refresh_vision(s, out)
     _check_elimination(s, out)
@@ -136,7 +143,7 @@ def step(state: State, actions: dict[str, Action]) -> tuple[State, list[Event]]:
 
 def _rotation(state: State) -> list[str]:
     """Player order for this turn, rotating so first strike moves around."""
-    living = state.living_player_ids()
+    living = state.living_civ_ids()
     if not living:
         return []
     shift = state.turn % len(living)
@@ -153,7 +160,7 @@ def _begin_turn(s: State, out: list[Event]) -> None:
         out.append(ev.event(s.turn, e.kind, e.detail, actor=e.actor, other=e.other))
 
     for _, unit in sorted(s.units.items()):
-        unit.moves_left = UNITS[unit.type].moves
+        unit.moves_left = movement.moves_for(s, unit)
         if unit.working_on is not None and unit.work_turns_left > 0:
             unit.work_turns_left -= 1
             if unit.work_turns_left == 0:
@@ -174,7 +181,7 @@ def _begin_turn(s: State, out: list[Event]) -> None:
 
 
 def _end_turn(s: State, out: list[Event]) -> None:
-    for player_id in s.player_ids():
+    for player_id in s.civ_ids():
         player = s.players[player_id]
         if not player.alive:
             continue
@@ -214,7 +221,24 @@ def _end_turn(s: State, out: list[Event]) -> None:
             economy.assign_tiles(s, city)
 
 
+def _develop_worked_water(s: State, city: City) -> None:
+    """Put fishing boats on water tiles the city works.
+
+    Automatic rather than worker-built, because a worker cannot walk onto water
+    to build anything there. Without this a coastal site is strictly worse than
+    an inland one - half its workable tiles would be permanently unimprovable -
+    and nobody would ever settle the shore that naval play depends on.
+    """
+    for key in city.worked_tiles:
+        tile = s.tiles.get(key)
+        if tile is None or tile.improvement is not None:
+            continue
+        if TERRAIN[tile.terrain].navigable:
+            s.tiles[key] = tile.model_copy(update={"improvement": Improvement.FISHING_BOATS})
+
+
 def _advance_city(s: State, city: City, out: list[Event]) -> None:
+    _develop_worked_water(s, city)
     growth = economy.grow_city(city, economy.food_surplus(s, city))
     if growth == "grew":
         out.append(
@@ -320,7 +344,9 @@ def _refresh_vision(s: State, out: list[Event]) -> None:
 
 
 def _check_elimination(s: State, out: list[Event]) -> None:
-    for player_id in s.player_ids():
+    # Civs only: the wilderness is never "eliminated", it just happens to have
+    # no units for a while until the next spawn.
+    for player_id in s.civ_ids():
         player = s.players[player_id]
         if not player.alive:
             continue
@@ -402,7 +428,12 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
         match item.action:
             case "send_message":
                 target = item.to if item.channel == "private" else None
-                if item.channel == "private" and (target not in s.players or target == player_id):
+                # `target not in s.players` is not enough: the wilderness *is*
+                # a player, so without the neutral check an agent could open a
+                # private channel with a wolf pack and have it accepted.
+                if item.channel == "private" and (
+                    target not in s.players or target == player_id or s.is_neutral(target)
+                ):
                     _reject(s, out, player_id, "send_message", f"unknown recipient {item.to!r}")
                     continue
                 diplomacy.send_message(s, player_id, item.channel, item.text, target)
@@ -418,8 +449,8 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                     )
                 )
             case "propose":
-                if item.to not in s.players or item.to == player_id:
-                    _reject(s, out, player_id, "propose", f"unknown recipient {item.to!r}")
+                if item.to not in s.players or item.to == player_id or s.is_neutral(item.to):
+                    _reject(s, out, player_id, "propose", f"cannot negotiate with {item.to!r}")
                     continue
                 p = diplomacy.open_proposal(
                     s, player_id, item.to, item.type, item.terms, item.message
@@ -455,8 +486,8 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                 for e in results:
                     out.append(ev.event(s.turn, e.kind, e.detail, actor=e.actor, other=e.other))
             case "declare_war":
-                if item.on not in s.players or item.on == player_id:
-                    _reject(s, out, player_id, "declare_war", f"unknown target {item.on!r}")
+                if item.on not in s.players or item.on == player_id or s.is_neutral(item.on):
+                    _reject(s, out, player_id, "declare_war", f"cannot declare war on {item.on!r}")
                     continue
                 for e in diplomacy.declare_war(s, player_id, item.on):
                     out.append(
@@ -582,9 +613,9 @@ def _move(s: State, player_id: str, order, out: list[Event]) -> None:  # noqa: A
     if hx.distance(unit.hex, target) != 1:
         _reject(s, out, player_id, "move_unit", "destination is not adjacent")
         return
-    tile = s.at(target)
-    if tile is None or not TERRAIN[tile.terrain].passable:
-        _reject(s, out, player_id, "move_unit", f"{order.to} is impassable")
+    allowed, why = movement.entry_check(s, unit, target)
+    if not allowed:
+        _reject(s, out, player_id, "move_unit", why)
         return
     if unit.moves_left <= 0:
         _reject(s, out, player_id, "move_unit", "no movement remaining")
@@ -599,18 +630,18 @@ def _move(s: State, player_id: str, order, out: list[Event]) -> None:  # noqa: A
         _reject(s, out, player_id, "move_unit", "tile holds a rival city; attack instead")
         return
 
-    unit.pos = target.to_key()
-    unit.moves_left = max(0, unit.moves_left - TERRAIN[tile.terrain].move_cost)
-    unit.fortified = False
-    unit.working_on = None
+    change = movement.apply_move(s, unit, target)
+    verb = {"embark": "put to sea at", "disembark": "landed at"}.get(change, "moved to")
     out.append(
         ev.event(
             s.turn,
             ev.UNIT_MOVED,
-            f"{unit.type.value} moved to {order.to}",
+            f"{unit.type.value} {verb} {order.to}",
             actor=player_id,
             unit_id=unit.id,
             pos=order.to,
+            transition=change,
+            embarked=unit.embarked,
         )
     )
 
@@ -622,6 +653,9 @@ def _attack(s: State, player_id: str, order, out: list[Event]) -> None:  # noqa:
         return
     if UNITS[attacker.type].civilian:
         _reject(s, out, player_id, "attack", f"{attacker.type.value} cannot attack")
+        return
+    if attacker.embarked:
+        _reject(s, out, player_id, "attack", "a unit at sea cannot attack; land first")
         return
     try:
         target = hx.from_key(order.target)
@@ -764,6 +798,9 @@ def _found_city(s: State, player_id: str, order, out: list[Event]) -> None:  # n
     if unit is None or unit.type is not UnitType.SETTLER:
         _reject(s, out, player_id, "found_city", "unit is not a settler you control")
         return
+    if unit.embarked:
+        _reject(s, out, player_id, "found_city", "a settler at sea must land first")
+        return
     tile = s.at(unit.hex)
     if tile is None or not TERRAIN[tile.terrain].settleable:
         _reject(s, out, player_id, "found_city", "terrain cannot support a city")
@@ -809,7 +846,15 @@ def _build_improvement(s: State, player_id: str, order, out: list[Event]) -> Non
     if unit is None or unit.type is not UnitType.WORKER:
         _reject(s, out, player_id, "build_improvement", "unit is not a worker you control")
         return
+    if unit.embarked:
+        _reject(s, out, player_id, "build_improvement", "a worker at sea must land first")
+        return
     improvement = Improvement(order.improvement)
+    if improvement not in WORKER_IMPROVEMENTS:
+        _reject(
+            s, out, player_id, "build_improvement", f"{improvement.value} is not built by workers"
+        )
+        return
     tile = s.at(unit.hex)
     if tile is None or tile.terrain not in IMPROVEMENTS[improvement].terrains:
         _reject(
@@ -840,6 +885,8 @@ def legal_actions(state: State, player_id: str) -> dict:
     for unit in state.units_of(player_id):
         spec = UNITS[unit.type]
         moves: list[str] = []
+        embarks: list[str] = []
+        disembarks: list[str] = []
         attacks: list[str] = []
         for n in hx.neighbors(unit.hex):
             tile = state.at(n)
@@ -850,14 +897,34 @@ def legal_actions(state: State, player_id: str) -> dict:
             hostile_city = city is not None and city.owner != player_id
             if hostile_units or hostile_city:
                 owner = hostile_units[0].owner if hostile_units else city.owner  # type: ignore[union-attr]
-                if not spec.civilian and state.at_war(player_id, owner) and unit.moves_left > 0:
+                if (
+                    movement.can_attack(state, unit)
+                    and state.at_war(player_id, owner)
+                    and unit.moves_left > 0
+                ):
                     attacks.append(n.to_key())
-            elif TERRAIN[tile.terrain].passable and unit.moves_left > 0:
+                continue
+            if unit.moves_left <= 0:
+                continue
+            # One source of truth with the reducer: anything offered here must
+            # be accepted there, which is the whole reason the agent is given a
+            # legal-action list at all.
+            allowed, _ = movement.entry_check(state, unit, n)
+            if not allowed:
+                continue
+            change = movement.transition(state, unit, n)
+            if change == "embark":
+                embarks.append(n.to_key())
+            elif change == "disembark":
+                disembarks.append(n.to_key())
+            else:
                 moves.append(n.to_key())
 
         tile = state.at(unit.hex)
+        ashore = movement.can_act_on_land(unit)
         can_found = (
             unit.type is UnitType.SETTLER
+            and ashore
             and tile is not None
             and TERRAIN[tile.terrain].settleable
             and all(
@@ -868,21 +935,27 @@ def legal_actions(state: State, player_id: str) -> dict:
         improvements = (
             sorted(
                 i.value
-                for i in Improvement
+                for i in WORKER_IMPROVEMENTS
                 if tile is not None and tile.terrain in IMPROVEMENTS[i].terrains
             )
-            if unit.type is UnitType.WORKER
+            if unit.type is UnitType.WORKER and ashore
             else []
         )
         units[unit.id] = {
             "move": sorted(moves),
+            # Kept separate from `move` so an agent can see that stepping here
+            # is a commitment - it ends the turn and leaves the unit exposed -
+            # rather than an ordinary step it might take by accident.
+            "embark": sorted(embarks),
+            "disembark": sorted(disembarks),
             "attack": sorted(attacks),
-            "fortify": not spec.civilian,
+            "fortify": not spec.civilian and not unit.embarked,
             "found_city": can_found,
             "build_improvement": improvements,
+            "embarked": unit.embarked,
         }
 
-    others = [p for p in state.player_ids() if p != player_id and state.players[p].alive]
+    others = [p for p in state.civ_ids() if p != player_id and state.players[p].alive]
     return {
         "units": units,
         "cities": {

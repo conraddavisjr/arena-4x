@@ -18,9 +18,11 @@ from arena_engine.content import (
     BUILDINGS,
     CITY_WORK_RADIUS,
     IMPROVEMENTS,
+    NEUTRAL_UNITS,
     RESOURCE_YIELDS,
     TERRAIN,
     UNITS,
+    Domain,
     Yields,
     food_to_grow,
     tech_cost,
@@ -153,9 +155,20 @@ def can_build_unit(state: State, city: City, unit_type: UT) -> bool:
     necessarily this city's. That is what makes losing an iron hill matter at
     the empire level rather than just locally.
     """
+    # Wildlife belongs to the wilderness. Without this the unit table's neutral
+    # entries fall straight through into `buildable`, and a civ is offered a
+    # wolf pack as a construction option - they have cost 0, so it would even
+    # have completed instantly.
+    if unit_type in NEUTRAL_UNITS:
+        return False
+
     spec = UNITS[unit_type]
     player = state.players[city.owner]
     if spec.req_tech is not None and spec.req_tech not in player.known_techs:
+        return False
+    # Ships need a coastline. Without this an inland capital could field a navy,
+    # which would make coastal sites worthless to settle.
+    if spec.domain is Domain.SEA and not is_coastal(state, city):
         return False
     if spec.req_resource is not None:
         owned = any(
@@ -165,6 +178,14 @@ def can_build_unit(state: State, city: City, unit_type: UT) -> bool:
         if not owned:
             return False
     return True
+
+
+def is_coastal(state: State, city: City) -> bool:
+    """Whether the city touches navigable water."""
+    return any(
+        (tile := state.at(n)) is not None and TERRAIN[tile.terrain].navigable
+        for n in hx.neighbors(city.hex)
+    )
 
 
 def can_build_building(state: State, city: City, name: str) -> bool:

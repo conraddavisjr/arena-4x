@@ -23,6 +23,7 @@ from arena_engine import rng
 from arena_engine.content import (
     COUNTER_BONUS_PCT,
     COUNTERS,
+    EMBARKED_DEFENSE_PCT,
     TERRAIN,
     UNITS,
 )
@@ -69,6 +70,12 @@ def attack_strength(state: State, attacker: Unit, defender: Unit) -> int:
 def defense_strength(state: State, defender: Unit, attacker: Unit) -> int:
     spec = UNITS[defender.type]
     strength = spec.defense * 100
+
+    # Caught at sea. Terrain, fortification and city bonuses are all irrelevant
+    # to a unit in transit, so return immediately rather than layering land
+    # bonuses onto something floating on the water.
+    if defender.embarked:
+        return max(1, spec.defense * EMBARKED_DEFENSE_PCT * defender.hp // 100)
 
     tile = state.at(defender.hex)
     if tile is not None:

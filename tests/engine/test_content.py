@@ -91,7 +91,70 @@ def test_improvements_apply_to_terrain_that_exists() -> None:
         assert spec.terrains, f"{name} applies to no terrain"
         for terrain in spec.terrains:
             assert terrain in c.TERRAIN
-            assert c.TERRAIN[terrain].passable, f"{name} on impassable {terrain}"
+
+
+def test_worker_improvements_are_on_terrain_a_worker_can_stand_on() -> None:
+    """A worker walks to the tile, so its improvements must be on land.
+
+    Fishing boats are the exception and are excluded from WORKER_IMPROVEMENTS
+    for exactly this reason: they sit on water and are placed by a coastal city
+    working the tile, not by a unit standing on it.
+    """
+    for improvement in c.WORKER_IMPROVEMENTS:
+        for terrain in c.IMPROVEMENTS[improvement].terrains:
+            assert c.TERRAIN[terrain].passable, f"{improvement} on land-impassable {terrain}"
+
+
+def test_water_improvements_are_on_navigable_terrain_only() -> None:
+    water_only = set(c.IMPROVEMENTS) - c.WORKER_IMPROVEMENTS
+    assert water_only, "expected at least one city-worked water improvement"
+    for improvement in water_only:
+        for terrain in c.IMPROVEMENTS[improvement].terrains:
+            assert c.TERRAIN[terrain].navigable, f"{improvement} on non-navigable {terrain}"
+
+
+def test_every_terrain_is_reachable_by_some_domain() -> None:
+    """Mountains are the one deliberate exception: closed to everything."""
+    unreachable = [
+        t
+        for t, spec in c.TERRAIN.items()
+        if not spec.open_to(c.Domain.LAND) and not spec.open_to(c.Domain.SEA)
+    ]
+    assert unreachable == [c.Terrain.MOUNTAINS], f"unexpectedly unreachable: {unreachable}"
+
+
+def test_sea_units_cannot_embark_and_land_units_can() -> None:
+    for unit, spec in c.UNITS.items():
+        if spec.domain is c.Domain.SEA:
+            assert not spec.can_embark, f"{unit} is already a sea unit"
+
+
+def test_embarkation_is_gated_on_a_real_tech() -> None:
+    assert c.EMBARK_TECH in c.TECHS
+    # Reachable early: the ocean is a third of the map, and gating it behind a
+    # late tech would waste most of the board for most of the match.
+    assert c.TECHS[c.EMBARK_TECH].era <= 2
+
+
+def test_naval_units_share_the_embark_tech() -> None:
+    naval = [u for u, s in c.UNITS.items() if s.domain is c.Domain.SEA]
+    assert naval, "there should be at least one sea unit"
+    for unit in naval:
+        assert c.UNITS[unit].req_tech == c.EMBARK_TECH
+
+
+def test_embarked_units_are_meaningfully_weaker() -> None:
+    """The crossing has to be the vulnerable part, or naval play is free."""
+    assert 0 < c.EMBARKED_DEFENSE_PCT < 100
+    weakest_naval = min(s.attack for s in c.UNITS.values() if s.domain is c.Domain.SEA)
+    toughest_embarked = max(
+        s.defense * c.EMBARKED_DEFENSE_PCT // 100
+        for s in c.UNITS.values()
+        if s.domain is c.Domain.LAND
+    )
+    assert weakest_naval > toughest_embarked, (
+        "a warship should beat anything caught at sea, or escorting is pointless"
+    )
 
 
 def test_apex_project_is_a_wonder_gated_on_apex_theory() -> None:
