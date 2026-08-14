@@ -9,7 +9,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine lint fmt clean bots map view export
+.PHONY: help setup setup-engine env test test-engine lint fmt clean bots map view view3d export
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -69,3 +69,10 @@ export:  ## Play a match and write a replay bundle. make export SEED=4
 	$(PY) scripts/export_match.py --seed $(or $(SEED),4)
 	@cp apps/viewer/index.html output/match-$(or $(SEED),4)/index.html
 	@echo "then: make view MATCH=output/match-$(or $(SEED),4)"
+
+view3d:  ## Serve the 3D world viewer. make view3d MATCH=output/match-4
+	@cp -r apps/viewer3d/vendor $(or $(MATCH),output/match-4)/vendor
+	@cp apps/viewer3d/world.js $(or $(MATCH),output/match-4)/world.js
+	@cp apps/viewer3d/index.html $(or $(MATCH),output/match-4)/world.html
+	@echo "http://localhost:8123/world.html  (ctrl-c to stop)"
+	@cd $(or $(MATCH),output/match-4) && $(PY) -m http.server 8123 --bind 127.0.0.1
