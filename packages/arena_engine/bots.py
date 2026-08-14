@@ -26,8 +26,10 @@ from arena_engine.actions import (
     FoundCity,
     MoveUnit,
     Order,
+    Propose,
     Reasoning,
     RespondToProposal,
+    SendMessage,
     SetProduction,
     SetRates,
     SetResearch,
@@ -35,7 +37,7 @@ from arena_engine.actions import (
 from arena_engine.content import MIN_CITY_SPACING, TERRAIN, UNITS, UnitType
 from arena_engine.hex import Hex
 from arena_engine.reducer import legal_actions
-from arena_engine.types import State
+from arena_engine.types import ProposalType, State, Terms
 
 # Buildings worth having, in the order a city should pursue them. Units are
 # chosen by need rather than from a list (see `_wanted`), because a static
@@ -122,12 +124,73 @@ def _handle_diplomacy(state: State, player_id: str, legal: dict, out: list) -> N
     visible_targets = sorted(set(targets) & seen)
     if not visible_targets:
         return
+    target = visible_targets[0]
+    name = state.players[target].civ_name
+
     if rng.chance(state.seed, _aggression(state.turn) * 0.06, "bot_war", state.turn, player_id):
+        out.append(DeclareWar(action="declare_war", on=target, casus_belli="Territorial ambition."))
         out.append(
-            DeclareWar(
-                action="declare_war", on=visible_targets[0], casus_belli="Territorial ambition."
+            SendMessage(
+                action="send_message",
+                channel="public",
+                text=f"{state.players[player_id].civ_name} declares war upon {name}. "
+                f"Their borders press too close to ours.",
             )
         )
+        return
+
+    # Sue for peace when losing, and court the uncommitted otherwise. Bots that
+    # never spoke left the diplomacy console, the treaty timeline and the
+    # deception panel with nothing to render and nothing to test against.
+    if state.at_war(player_id, target):
+        if _weaker_than(state, player_id, target) and rng.chance(
+            state.seed, 0.25, "bot_peace", state.turn, player_id
+        ):
+            out.append(
+                Propose(
+                    action="propose",
+                    to=target,
+                    type=ProposalType.PEACE,
+                    message="This war profits neither of us. Let it end.",
+                )
+            )
+            out.append(
+                SendMessage(
+                    action="send_message",
+                    channel="private",
+                    to=target,
+                    text="We propose peace. Our quarrel has cost us both enough.",
+                )
+            )
+    elif rng.chance(state.seed, 0.04, "bot_pact", state.turn, player_id):
+        out.append(
+            Propose(
+                action="propose",
+                to=target,
+                type=ProposalType.NON_AGGRESSION,
+                terms=Terms(duration_turns=25),
+                message="Neither of us gains from a war on this frontier.",
+            )
+        )
+        out.append(
+            SendMessage(
+                action="send_message",
+                channel="private",
+                to=target,
+                text=f"We have no quarrel with {name}. Let us agree to keep it so.",
+            )
+        )
+
+
+def _weaker_than(state: State, player_id: str, other: str) -> bool:
+    def power(pid: str) -> int:
+        return sum(
+            UNITS[u.type].attack + UNITS[u.type].defense
+            for u in state.units_of(pid)
+            if not UNITS[u.type].civilian
+        )
+
+    return power(player_id) < power(other) * 0.8
 
 
 def _order_units(state: State, player_id: str, legal: dict, out: list[Order]) -> None:
