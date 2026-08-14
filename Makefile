@@ -9,7 +9,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine lint fmt clean bots map
+.PHONY: help setup setup-engine env test test-engine lint fmt clean bots map view export
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -60,3 +60,12 @@ fmt:  ## Fix what can be fixed automatically
 clean:  ## Remove caches and build artifacts
 	rm -rf .pytest_cache .ruff_cache .hypothesis build dist
 	find . -type d -name __pycache__ -not -path './.venv/*' -exec rm -rf {} +
+
+view:  ## Serve an exported match in the browser. make view MATCH=output/match-4
+	@echo "http://localhost:8123/  (ctrl-c to stop)"
+	@cd $(or $(MATCH),output/match-4) && $(PY) -m http.server 8123 --bind 127.0.0.1
+
+export:  ## Play a match and write a replay bundle. make export SEED=4
+	$(PY) scripts/export_match.py --seed $(or $(SEED),4)
+	@cp apps/viewer/index.html output/match-$(or $(SEED),4)/index.html
+	@echo "then: make view MATCH=output/match-$(or $(SEED),4)"

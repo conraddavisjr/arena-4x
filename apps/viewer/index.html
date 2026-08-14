@@ -1,0 +1,423 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ARENA-4X replay</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  The replay viewer.
+
+  A pure function of the bundle: it loads match.json plus one turn at a time and
+  renders. It has no API client, no keys, no writes, and no branch of the game
+  other than the one that happened - a visitor can scrub, focus a civ and read,
+  and nothing else exists to do. "Live" is the same page pointed at a bundle
+  that is still growing.
+
+  Deliberately dependency-free and single-file so it can be dropped onto a
+  static host, embedded in an iframe, or inlined into a page without a build
+  step.
+-->
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #232a34;
+    --ink: #e6edf3; --dim: #8b949e; --faint: #4d5560;
+    --c0: #4ade80; --c1: #fbbf24; --c2: #38bdf8; --c3: #f472b6;
+    --wild: #a1a1aa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: grid; grid-template-columns: minmax(0,1fr) 380px; height: 100vh; overflow: hidden;
+  }
+  @media (max-width: 900px) { body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); flex-wrap: wrap;
+  }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  .modes { display: flex; gap: 2px; }
+  button {
+    background: #1f2630; color: var(--ink); border: 1px solid var(--line);
+    padding: 5px 10px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  button:hover { background: #2a323d; }
+  button[aria-pressed="true"] { background: #2f6feb; border-color: #2f6feb; }
+  button:disabled { opacity: .4; cursor: default; }
+
+  #board { flex: 1; min-height: 0; display: block; }
+  .scrub { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-top: 1px solid var(--line); }
+  input[type=range] { flex: 1; accent-color: #2f6feb; }
+  .turn { font-variant-numeric: tabular-nums; min-width: 92px; color: var(--dim); }
+
+  section { border-bottom: 1px solid var(--line); padding: 12px 14px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+       margin: 0 0 8px; font-weight: 600; }
+  .civ { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dead { opacity: .4; text-decoration: line-through; }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 3px 4px; }
+  td.name { width: 44%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  th, td { font-size: 12px; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--dim); font-weight: 500; font-size: 11px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover { background: #1c222c; }
+  .neg { color: #f87171; } .pos { color: #4ade80; }
+
+  .matrix { border-collapse: collapse; margin-top: 4px; }
+  .matrix td, .matrix th { width: 26px; height: 22px; text-align: center; padding: 0;
+                           border: 1px solid var(--line); font-size: 11px; }
+  .matrix .self { background: #11151b; }
+
+  .feed { display: grid; gap: 8px; }
+  .card { background: #11161d; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .card .who { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 4px; }
+  .card p { margin: 2px 0; color: var(--dim); }
+  .card p.plan { color: var(--ink); }
+
+  .msg { border-left: 2px solid var(--line); padding: 4px 0 4px 8px; margin-bottom: 6px; }
+  .msg.private { border-left-color: #f472b6; }
+  .msg .meta { color: var(--faint); font-size: 11px; }
+  .tick { color: var(--dim); padding: 1px 0; }
+  .tick b { color: var(--ink); font-weight: 500; }
+  .empty { color: var(--faint); font-style: italic; }
+  .hint { color: var(--faint); font-size: 11px; margin-top: 6px; }
+</style>
+
+<main>
+  <header>
+    <h1>ARENA-4X</h1>
+    <div class="modes" id="modes"></div>
+    <button id="play">▶ Play</button>
+    <span class="turn" id="status"></span>
+  </header>
+  <svg id="board"></svg>
+  <div class="scrub">
+    <button id="prev">‹</button>
+    <input type="range" id="slider" min="1" value="1">
+    <button id="next">›</button>
+    <span class="turn" id="turnLabel"></span>
+  </div>
+</main>
+
+<aside>
+  <section><h2>Empires</h2><div id="economy"></div></section>
+  <section><h2>Contact</h2><div id="contact"></div>
+    <div class="hint">Row sees column. Asymmetry means one side is watching unseen.</div></section>
+  <section><h2>Reasoning</h2><div class="feed" id="reasoning"></div></section>
+  <section><h2>Diplomacy</h2><div id="messages"></div></section>
+  <section><h2>Events</h2><div id="events"></div></section>
+</aside>
+
+<script type="module">
+const BASE = new URLSearchParams(location.search).get("match") || ".";
+const COLOURS = ["var(--c0)", "var(--c1)", "var(--c2)", "var(--c3)"];
+const TERRAIN = {
+  ocean: "#12314f", coast: "#1c4f70", grassland: "#3f6b34", plains: "#7a7331",
+  forest: "#2c5230", hills: "#6b5f45", desert: "#9c8a52", mountains: "#4a4a52",
+};
+
+const state = { match: null, frame: null, turn: 1, mode: "god", focus: null, playing: null };
+const cache = new Map();
+
+const $ = (id) => document.getElementById(id);
+const civOf = (id) => state.match.civs.find((c) => c.player_id === id);
+const colourOf = (id) => (civOf(id) ? COLOURS[civOf(id).colour % 4] : "var(--wild)");
+const nameOf = (id) => (civOf(id) ? civOf(id).civ_name : "Wilderness");
+
+async function loadFrame(turn) {
+  if (cache.has(turn)) return cache.get(turn);
+  const res = await fetch(`${BASE}/turns/${String(turn).padStart(4, "0")}.json`);
+  if (!res.ok) throw new Error(`turn ${turn} missing`);
+  const frame = await res.json();
+  cache.set(turn, frame);
+  return frame;
+}
+
+// Terrain, borders and improvements are deltas in the bundle, so replaying from
+// turn 1 to the requested turn is how the board is reconstructed. Cheap because
+// frames are small and cached, and it keeps the bundle a fraction of the size
+// full snapshots would be.
+async function boardAt(turn) {
+  const owners = new Array(state.match.terrain.length).fill(null);
+  const improvements = {};
+  for (let t = 1; t <= turn; t++) {
+    const frame = await loadFrame(t);
+    for (const [i, who] of Object.entries(frame.owners || {})) owners[+i] = who;
+    Object.assign(improvements, frame.improvements || {});
+  }
+  return { owners, improvements };
+}
+
+function hexPoints(cx, cy, size) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 180) * (60 * i - 30);
+    pts.push(`${(cx + size * Math.cos(a)).toFixed(1)},${(cy + size * Math.sin(a)).toFixed(1)}`);
+  }
+  return pts.join(" ");
+}
+
+function layout() {
+  const coords = state.match.tiles.map((k) => k.split(",").map(Number));
+  const size = 12;
+  const pts = coords.map(([q, r]) => [size * Math.sqrt(3) * (q + r / 2), size * 1.5 * r]);
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return {
+    size, pts,
+    box: [Math.min(...xs) - size, Math.min(...ys) - size,
+          Math.max(...xs) - Math.min(...xs) + size * 2, Math.max(...ys) - Math.min(...ys) + size * 2],
+  };
+}
+
+let LAYOUT = null;
+let NEIGHBOURS = null;
+
+// Adjacency by tile index, built once. Used to find the edge of a vision field.
+function buildNeighbours() {
+  const at = new Map(state.match.tiles.map((k, i) => [k, i]));
+  const dirs = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+  return state.match.tiles.map((key) => {
+    const [q, r] = key.split(",").map(Number);
+    return dirs.map(([dq, dr]) => {
+      const found = at.get(`${q + dq},${r + dr}`);
+      return found === undefined ? null : found;
+    });
+  });
+}
+
+function nearest(from, target) {
+  if (!from.length) return null;
+  const { pts } = LAYOUT;
+  const [tx, ty] = pts[target];
+  let best = null, bestD = Infinity;
+  for (const i of from) {
+    const [x, y] = pts[i];
+    const d = (x - tx) ** 2 + (y - ty) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+async function draw() {
+  const f = state.frame, m = state.match, { size, pts, box } = LAYOUT;
+  const { owners, improvements } = await boardAt(state.turn);
+  const svg = $("board");
+  svg.setAttribute("viewBox", box.join(" "));
+
+  // Which tiles are lit depends on the mode. God sees all; agent view is one
+  // civ's fog; contact view is god terrain with every civ's vision outlined.
+  let lit = null;
+  if (state.mode === "agent" && state.focus) lit = new Set(f.visibility[state.focus] || []);
+
+  const parts = [];
+  m.terrain.forEach((terrain, i) => {
+    const [x, y] = pts[i];
+    const seen = !lit || lit.has(i);
+    const fill = seen ? TERRAIN[terrain] : "#0b0e13";
+    parts.push(`<polygon points="${hexPoints(x, y, size)}" fill="${fill}" stroke="#0b0e13" stroke-width=".5"/>`);
+    if (seen && owners[i]) {
+      parts.push(`<polygon points="${hexPoints(x, y, size * .94)}" fill="none" stroke="${colourOf(owners[i])}" stroke-width="1" opacity=".45"/>`);
+    }
+    if (seen && m.resources[i]) {
+      parts.push(`<circle cx="${x + size * .5}" cy="${y - size * .5}" r="2" fill="#fca5a5"/>`);
+    }
+    if (seen && improvements[i]) {
+      parts.push(`<circle cx="${x - size * .5}" cy="${y + size * .5}" r="1.8" fill="#93c5fd" opacity=".8"/>`);
+    }
+  });
+
+  // Contact view: the *perimeter* of each civ's vision, hatched where fields
+  // overlap, plus a sightline to every rival asset actually being watched.
+  //
+  // Perimeter rather than every tile: outlining all of them turned four
+  // overlapping fields into noise you had to squint through. A civ's awareness
+  // reads as a shape when only its edge is drawn.
+  if (state.mode === "contact") {
+    const counts = new Map();
+    for (const [pid, tiles] of Object.entries(f.visibility)) {
+      const inField = new Set(tiles);
+      for (const i of tiles) counts.set(i, (counts.get(i) || 0) + 1);
+      for (const i of tiles) {
+        if (NEIGHBOURS[i].every((n) => n === null || inField.has(n))) continue;
+        const [x, y] = pts[i];
+        parts.push(`<polygon points="${hexPoints(x, y, size * .9)}" fill="none" stroke="${colourOf(pid)}" stroke-width="1.6" opacity=".85"/>`);
+      }
+    }
+    for (const [i, n] of counts) {
+      if (n < 2) continue;
+      const [x, y] = pts[i];
+      parts.push(`<polygon points="${hexPoints(x, y, size * .72)}" fill="#ffffff" opacity=".13"/>`);
+    }
+
+    // Directed sightlines. One-way contact - a scout watching an army while
+    // itself unseen - is the fact no single-civ view can show, so it is drawn
+    // rather than left to be inferred.
+    for (const [observer, seen] of Object.entries(f.contact || {})) {
+      if (!seen.length) continue;
+      const mine = f.units.filter((u) => u.owner === observer).map((u) => u.at);
+      const lit = new Set(f.visibility[observer] || []);
+      for (const other of seen) {
+        const targets = [...f.units, ...f.cities].filter((a) => a.owner === other && lit.has(a.at));
+        for (const t of targets.slice(0, 2)) {
+          const from = nearest(mine, t.at);
+          if (from === null) continue;
+          const [x1, y1] = pts[from], [x2, y2] = pts[t.at];
+          parts.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${colourOf(observer)}" stroke-width="1.3" opacity=".7" stroke-dasharray="3 2"/>`);
+        }
+      }
+    }
+  }
+
+  for (const c of f.cities) {
+    if (lit && !lit.has(c.at)) continue;
+    const [x, y] = pts[c.at];
+    parts.push(`<rect x="${x - 5}" y="${y - 5}" width="10" height="10" rx="2" fill="${colourOf(c.owner)}" stroke="#0b0e13"/>`);
+    parts.push(`<text x="${x}" y="${y + 3}" font-size="7" text-anchor="middle" fill="#08101a" font-weight="700">${c.population}</text>`);
+  }
+  for (const u of f.units) {
+    if (lit && !lit.has(u.at)) continue;
+    const [x, y] = pts[u.at];
+    const wild = !civOf(u.owner);
+    parts.push(`<circle cx="${x}" cy="${y}" r="${wild ? 2.6 : 3.4}" fill="${colourOf(u.owner)}" ${u.embarked ? 'stroke="#7dd3fc" stroke-width="1.2"' : ""} opacity="${wild ? .85 : 1}"/>`);
+  }
+
+  svg.innerHTML = parts.join("");
+}
+
+function economyPanel() {
+  const e = state.frame.economy;
+  const rows = state.match.civs.map((c) => {
+    const d = e[c.player_id] || {};
+    // A zero delta is omitted entirely. Rendering it produced "7 0", which
+    // reads as seventy - the one number on this panel you must not misread.
+    const sign = (n) =>
+      n ? `<span class="${n < 0 ? "neg" : "pos"}">${n > 0 ? "+" : ""}${n}</span>` : "";
+    return `<tr class="${d.alive ? "" : "dead"}">
+      <td class="name" title="${c.civ_name}"><span class="civ"><span class="dot" style="background:${COLOURS[c.colour]}"></span>${c.civ_name}</span></td>
+      <td>${d.gold ?? 0} ${sign(d.gold_per_turn ?? 0)}</td>
+      <td>${d.food_stored ?? 0} ${sign(d.food_surplus ?? 0)}</td>
+      <td>${d.production_per_turn ?? 0}</td>
+      <td>${d.science_per_turn ?? 0}</td>
+      <td>${d.cities ?? 0}/${d.units ?? 0}</td>
+      <td>${d.score ?? 0}</td></tr>`;
+  });
+  $("economy").innerHTML = `<table>
+    <thead><tr><th>civ</th><th>gold</th><th>food</th><th>prod</th><th>sci</th><th>c/u</th><th>score</th></tr></thead>
+    <tbody>${rows.join("")}</tbody></table>`;
+}
+
+function contactPanel() {
+  const civs = state.match.civs, c = state.frame.contact || {};
+  const head = civs.map((x) => `<th style="color:${COLOURS[x.colour]}">${x.player_id}</th>`).join("");
+  const rows = civs.map((a) => {
+    const cells = civs.map((b) => {
+      if (a.player_id === b.player_id) return `<td class="self"></td>`;
+      const sees = (c[a.player_id] || []).includes(b.player_id);
+      return `<td style="background:${sees ? COLOURS[a.colour] : "transparent"}"></td>`;
+    }).join("");
+    return `<tr><th style="color:${COLOURS[a.colour]}">${a.player_id}</th>${cells}</tr>`;
+  });
+  $("contact").innerHTML = `<table class="matrix"><tr><th></th>${head}</tr>${rows.join("")}</table>`;
+}
+
+function reasoningPanel() {
+  const r = state.frame.reasoning || {};
+  const cards = state.match.civs.filter((c) => r[c.player_id]).map((c) => {
+    const d = r[c.player_id];
+    return `<div class="card">
+      <div class="who"><span class="dot" style="background:${COLOURS[c.colour]}"></span>${c.civ_name}</div>
+      ${d.assessment ? `<p>${esc(d.assessment)}</p>` : ""}
+      <p class="plan">${esc(d.plan || "—")}</p>
+      ${d.threats?.length ? `<p>⚠ ${d.threats.map(esc).join(" · ")}</p>` : ""}
+    </div>`;
+  });
+  $("reasoning").innerHTML = cards.join("") || `<div class="empty">No reasoning recorded this turn.</div>`;
+}
+
+function messagesPanel() {
+  const msgs = state.frame.messages || [];
+  const rel = Object.entries(state.frame.relations || {})
+    .filter(([, v]) => v.state !== "neutral")
+    .map(([k, v]) => `<div class="tick">${k.replace("|", " · ")} <b>${v.state}</b> since turn ${v.since}</div>`);
+  const items = msgs.map((m) => `<div class="msg ${m.channel}">
+      <div class="meta">${nameOf(m.from)}${m.to ? ` → ${nameOf(m.to)}` : " · public"}</div>
+      ${esc(m.text)}</div>`);
+  $("messages").innerHTML =
+    (items.join("") || `<div class="empty">Nothing said this turn.</div>`) +
+    (rel.length ? `<div style="margin-top:8px">${rel.join("")}</div>` : "");
+}
+
+function eventsPanel() {
+  const items = (state.frame.events || []).map(
+    (e) => `<div class="tick">${e.actor ? `<b style="color:${colourOf(e.actor)}">${e.actor}</b> ` : ""}${esc(e.text)}</div>`
+  );
+  $("events").innerHTML = items.join("") || `<div class="empty">Quiet turn.</div>`;
+}
+
+const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+
+async function show(turn) {
+  state.turn = Math.max(1, Math.min(turn, state.match.turns));
+  state.frame = await loadFrame(state.turn);
+  $("slider").value = state.turn;
+  $("turnLabel").textContent = `turn ${state.turn} / ${state.match.turns}`;
+  // Withheld until the replay reaches it. A visitor scrubbing a published match
+  // should not be told who wins in the header on turn 1.
+  const v = state.outcome;
+  $("status").textContent =
+    v && state.turn >= state.match.turns
+      ? `${nameOf(v.winner)} won by ${v.condition} on turn ${v.turn}`
+      : "";
+  await draw();
+  economyPanel(); contactPanel(); reasoningPanel(); messagesPanel(); eventsPanel();
+  // Prefetch neighbours so scrubbing stays smooth without loading the match.
+  for (const t of [state.turn + 1, state.turn + 2]) if (t <= state.match.turns) loadFrame(t).catch(() => {});
+}
+
+function buildModes() {
+  const opts = [["god", "God"], ["contact", "Contact"],
+    ...state.match.civs.map((c) => [`agent:${c.player_id}`, c.civ_name.split(" ")[0]])];
+  $("modes").innerHTML = opts.map(([k, label]) =>
+    `<button data-mode="${k}" aria-pressed="${k === "god"}">${label}</button>`).join("");
+  $("modes").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const [mode, who] = b.dataset.mode.split(":");
+    state.mode = mode === "agent" ? "agent" : mode;
+    state.focus = who || null;
+    for (const x of $("modes").children) x.setAttribute("aria-pressed", x === b);
+    draw();
+  };
+}
+
+function togglePlay() {
+  if (state.playing) { clearInterval(state.playing); state.playing = null; $("play").textContent = "▶ Play"; return; }
+  $("play").textContent = "❚❚ Pause";
+  state.playing = setInterval(async () => {
+    if (state.turn >= state.match.turns) return togglePlay();
+    await show(state.turn + 1);
+  }, 550);
+}
+
+(async function init() {
+  state.match = await (await fetch(`${BASE}/match.json`)).json();
+  LAYOUT = layout();
+  NEIGHBOURS = buildNeighbours();
+  state.outcome = state.match.victory;
+  $("slider").max = state.match.turns;
+  buildModes();
+  $("slider").oninput = (e) => show(+e.target.value);
+  $("prev").onclick = () => show(state.turn - 1);
+  $("next").onclick = () => show(state.turn + 1);
+  $("play").onclick = togglePlay;
+  addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") show(state.turn - 1);
+    if (e.key === "ArrowRight") show(state.turn + 1);
+    if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  });
+  await show(1);
+})();
+</script>
