@@ -1,17 +1,22 @@
 /**
  * The world: terrain, settlements, armies and wildlife, built as 3D geometry.
  *
- * **Everything is instanced.** The board is ~1000 tiles and a late-game turn
- * carries 80+ units; one mesh per object would be a thousand draw calls and the
- * camera would stutter the moment you tried to orbit. Instead there is one
- * InstancedMesh per *kind* of thing - one for the entire hex field, one per tree
- * species, one per unit type - which is roughly 25 draw calls for the whole
- * scene regardless of how big the empire grows.
+ * **Nothing is drawn one object at a time.** The board is ~1000 tiles and a
+ * late-game turn carries 80+ units; a mesh per object would be a thousand draw
+ * calls and the camera would stutter the moment you tried to orbit. Everything
+ * is batched per *kind* of thing - one mesh for each terrain type, one per tree
+ * species, two per unit type - which is a few dozen draw calls for the whole
+ * scene regardless of how big the empires grow.
+ *
+ * Trees, units and resources are instanced, because every copy is identical.
+ * The terrain is *merged* rather than instanced, because instancing forces one
+ * flat colour per tile and that is what made every terrain boundary a hard
+ * edge; see `buildTerrain`.
  *
  * Geometry is procedural rather than loaded from model files. That keeps the
  * art direction consistent, avoids a licence question on a page that gets
  * published, and means the whole viewer is still text in a repo. Swapping in
- * real GLTF models later replaces `unitGeometry` and nothing else.
+ * real GLTF models later replaces `unitModel` and nothing else.
  */
 
 import * as THREE from "three";
@@ -36,6 +41,7 @@ export const GROUND = {
   forest: 0x2f6b34, hills: 0x8a7346, desert: 0xe4cf90, mountains: 0x74737c,
 };
 const SAND = 0xd9c288;
+const FOAM = 0xa8dced;
 const WATER = new Set(["ocean", "coast"]);
 export const CIV_COLOURS = [0x4ade80, 0xfbbf24, 0x38bdf8, 0xf472b6];
 export const WILD_COLOUR = 0x9aa0aa;
@@ -160,86 +166,220 @@ function terrainTexture(kind) {
   return tex;
 }
 
-/** Which land tiles touch water, and therefore get a sand shoreline. */
-function shoreline(tiles, terrain) {
+/** Neighbour lookup for every tile, by direction index. Built once and reused
+ *  by the shoreline pass, the depth pass and the corner blending. */
+function neighbours(tiles) {
   const index = new Map(tiles.map((key, i) => [key, i]));
-  const shore = new Set();
-  tiles.forEach((key, i) => {
-    if (WATER.has(terrain[i]) || terrain[i] === "mountains") return;
+  return tiles.map((key) => {
     const [q, r] = key.split(",").map(Number);
-    for (const [dq, dr] of DIRS) {
-      const j = index.get(`${q + dq},${r + dr}`);
-      if (j !== undefined && WATER.has(terrain[j])) return shore.add(i);
-    }
+    return DIRS.map(([dq, dr]) => index.get(`${q + dq},${r + dr}`) ?? -1);
   });
-  return shore;
 }
 
+/** Rings of water outward from the nearest land, so open sea reads as deeper
+ *  than the shallows. Freeciv gets this from two water sprites; a distance
+ *  field gives a continuous gradient for the same idea. */
+function depth(tiles, terrain, near) {
+  const dist = new Int16Array(tiles.length).fill(-1);
+  const queue = [];
+  terrain.forEach((kind, i) => {
+    if (!WATER.has(kind)) return;
+    if (near[i].some((j) => j >= 0 && !WATER.has(terrain[j]))) {
+      dist[i] = 0;
+      queue.push(i);
+    }
+  });
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head];
+    if (dist[i] >= 4) continue;
+    for (const j of near[i]) {
+      if (j >= 0 && WATER.has(terrain[j]) && dist[j] < 0) {
+        dist[j] = dist[i] + 1;
+        queue.push(j);
+      }
+    }
+  }
+  return dist;
+}
+
+/** The colour of a tile before any blending: terrain, jitter, shore, depth. */
+function tileColour(i, terrain, shore, dist) {
+  const kind = terrain[i];
+  const colour = new THREE.Color(GROUND[kind] ?? 0x777777);
+  // Slight per-tile value jitter, keyed to the index so it never shimmers
+  // between turns. Without it a large grassland reads as one flat sheet.
+  colour.offsetHSL(0, 0, (((i * 2654435761) % 1000) / 1000 - 0.5) * 0.07);
+  // The shoreline. Ringing every landmass in sand is the thing that makes a
+  // coast legible at a glance, and it does the work of a whole transition-tile
+  // system for the cost of one lerp.
+  if (shore.has(i)) colour.lerp(new THREE.Color(SAND), 0.42);
+  if (WATER.has(kind)) {
+    if (dist[i] === 0) colour.lerp(new THREE.Color(FOAM), 0.3);
+    else colour.multiplyScalar(1 - Math.min(dist[i], 4) * 0.11);
+  }
+  return colour;
+}
+
+/**
+ * The board as merged geometry, one mesh per terrain type.
+ *
+ * Instancing was the obvious choice and it is the wrong one here. An
+ * `InstancedMesh` shares a single geometry across every copy, so a tile can
+ * only be one flat colour - which is why every terrain boundary was a hard
+ * edge. Merging instead gives every *vertex* its own colour, and colouring the
+ * six corners of a hex by the average of the tiles meeting at that corner
+ * makes the transition blend. Adjacent tiles agree on the shared corner, so
+ * the gradient is continuous across the seam: a real blend, not a blend
+ * texture. Freeciv needs a hand-authored transition sprite per terrain pair to
+ * get the same effect.
+ *
+ * Still one mesh per terrain type, so each keeps its own surface texture, and
+ * still ~8 draw calls. Vertex colours interpolate across a triangle regardless
+ * of `flatShading`, so the lighting stays faceted while the colour is smooth.
+ *
+ * Geometry note that predates this: the hex is built at radius exactly HEX
+ * with corner k at (sin(k*60deg), cos(k*60deg)), which is pointy-top - the
+ * orientation this axial layout is spaced for. An earlier version rotated the
+ * tiles 30 degrees, which made every column flat-top while the spacing stayed
+ * pointy-top, so neighbours overlapped along one axis and gapped along the
+ * others. At this orientation the seam is exactly zero.
+ */
 export function buildTerrain(tiles, terrain) {
-  // One instanced hex column per terrain *type* - eight draw calls for the
-  // whole board - because each type now carries its own surface texture and a
-  // single InstancedMesh can only hold one.
-  //
-  // Radius exactly HEX and *no* rotation, which is what makes the board a solid
-  // surface instead of scattered tiles. three.js puts a cylinder's first vertex
-  // at +Z, so a six-sided cylinder is already pointy-top - the orientation this
-  // axial layout is spaced for. The earlier `rotateY(PI/6)` turned every column
-  // flat-top while the spacing stayed pointy-top, so neighbours overlapped
-  // along one axis and left gaps along the others. That mismatch, not the
-  // radius, is what produced the broken-honeycomb look with dark voids between
-  // tiles. At radius HEX with no rotation the seam is exactly zero.
   const group = new THREE.Group();
-  const shore = shoreline(tiles, terrain);
-  const sand = new THREE.Color(SAND);
+  const near = neighbours(tiles);
+  const shore = new Set();
+  terrain.forEach((kind, i) => {
+    if (WATER.has(kind) || kind === "mountains") return;
+    if (near[i].some((j) => j >= 0 && WATER.has(terrain[j]))) shore.add(i);
+  });
+  const dist = depth(tiles, terrain, near);
+  const colours = tiles.map((_, i) => tileColour(i, terrain, shore, dist));
+
+  // Corner k is shared with the neighbours across the two edges that meet
+  // there - EDGES[k] and EDGES[k-1] both contain it.
+  // The tile's own colour is weighted double. At an equal three-way average a
+  // lone desert tile surrounded by grassland lost its identity entirely, and
+  // the point of the blend is to soften the seam, not to erase what the tile is
+  // - a spectator still has to be able to read terrain off the board.
+  const OWN = 2;
+  const cornerColour = (i, k) => {
+    const mix = scratch.copy(colours[i]).multiplyScalar(OWN);
+    let n = OWN;
+    for (const d of [k, (k + 5) % 6]) {
+      const j = near[i][d];
+      if (j < 0) continue;
+      mix.add(colours[j]);
+      n++;
+    }
+    return mix.multiplyScalar(1 / n);
+  };
+
   const byKind = new Map();
   terrain.forEach((kind, i) => {
     if (!byKind.has(kind)) byKind.set(kind, []);
     byKind.get(kind).push(i);
   });
 
-  const m = new THREE.Matrix4();
   for (const [kind, indices] of byKind) {
-    const mesh = new THREE.InstancedMesh(
-      cyl(HEX, HEX, 1, 6),
-      new THREE.MeshLambertMaterial({ flatShading: true, map: terrainTexture(kind) }),
-      indices.length
-    );
-    const base = [];
-    indices.forEach((i, n) => {
+    const water = WATER.has(kind);
+    // 6 top triangles plus 6 side quads: 18 + 36 vertices per tile.
+    const verts = indices.length * 54;
+    const pos = new Float32Array(verts * 3);
+    const col = new Float32Array(verts * 3);
+    const uv = new Float32Array(verts * 2);
+    const tileOf = new Uint32Array(verts);
+    let v = 0;
+
+    const push = (x, y, z, c, tile) => {
+      pos.set([x, y, z], v * 3);
+      col.set([c.r, c.g, c.b], v * 3);
+      // Planar UV in world space rather than per tile, so the surface pattern
+      // runs continuously across neighbouring tiles of the same terrain
+      // instead of repeating once per hex.
+      uv.set([(x + z * 0.5) / 2.6, (z + y) / 2.6], v * 2);
+      tileOf[v] = tile;
+      v++;
+    };
+
+    for (const i of indices) {
       const [q, r] = tiles[i].split(",").map(Number);
-      const [x, , z] = axialToWorld(q, r);
+      const [cx, , cz] = axialToWorld(q, r);
       const h = HEIGHT[kind] ?? 0.36;
-      m.makeScale(1, h, 1);
-      m.setPosition(x, h / 2, z);
-      mesh.setMatrixAt(n, m);
-      // Slight per-tile value jitter, keyed to the index so it never shimmers
-      // between turns. Without it a large grassland reads as one flat sheet.
-      const colour = new THREE.Color(GROUND[kind] ?? 0x777777);
-      colour.offsetHSL(0, 0, (((i * 2654435761) % 1000) / 1000 - 0.5) * 0.07);
-      // The shoreline. Ringing every landmass in sand is the thing that makes a
-      // coast legible at a glance, and it is doing the work of a whole
-      // transition-tile system for the cost of one lerp.
-      if (shore.has(i)) colour.lerp(sand, 0.42);
-      base.push(colour);
-      mesh.setColorAt(n, colour);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
+      const own = colours[i];
+      const corners = [0, 1, 2, 3, 4, 5].map((k) => corner(k, HEX));
+      const tips = [0, 1, 2, 3, 4, 5].map((k) => cornerColour(i, k).clone());
+      // Cliff faces darken toward the base, which is what gives the relief
+      // its depth at a low camera angle.
+      const foot = own.clone().multiplyScalar(0.62);
+
+      for (let k = 0; k < 6; k++) {
+        const [ax, az] = corners[k];
+        const [bx, bz] = corners[(k + 1) % 6];
+        // Top face, wound anticlockwise from above so the normal points up.
+        push(cx, h, cz, own, i);
+        push(cx + ax, h, cz + az, tips[k], i);
+        push(cx + bx, h, cz + bz, tips[(k + 1) % 6], i);
+        // Side wall, wound so the normal points away from the tile centre.
+        push(cx + ax, h, cz + az, tips[k], i);
+        push(cx + ax, 0, cz + az, foot, i);
+        push(cx + bx, 0, cz + bz, foot, i);
+        push(cx + ax, h, cz + az, tips[k], i);
+        push(cx + bx, 0, cz + bz, foot, i);
+        push(cx + bx, h, cz + bz, tips[(k + 1) % 6], i);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+    geo.computeVertexNormals();
+
+    // Water is the one surface that has to be shiny. Lambert is purely
+    // diffuse, so ocean rendered as painted clay no matter what colour or
+    // texture it was given; a specular highlight is the single cue that says
+    // liquid rather than solid.
+    const material = water
+      ? new THREE.MeshPhongMaterial({
+          vertexColors: true, flatShading: true, map: terrainTexture(kind),
+          shininess: 80, specular: 0x9fd6ff,
+        })
+      : new THREE.MeshLambertMaterial({
+          vertexColors: true, flatShading: true, map: terrainTexture(kind),
+        });
+
+    const mesh = new THREE.Mesh(geo, material);
     mesh.receiveShadow = true;
-    mesh.castShadow = true;
-    mesh.userData = { indices, base };
+    mesh.castShadow = !water;
+    mesh.userData = { tileOf, base: col.slice(), paints: true };
     group.add(mesh);
   }
-  group.userData.paint = (shade) => paint(group, shade);
+  group.userData.paint = (shade) => paintVertices(group, shade);
   return group;
 }
 
 /**
- * Re-tint instances by tile, which is how fog of war is applied.
+ * Re-tint by tile, which is how fog of war is applied.
  *
  * Rebuilding the board on every focus change would drop frames on a 1000-tile
- * map; multiplying the existing colour buffer is close to free.
+ * map; multiplying the existing colour buffer in place is close to free.
  */
-function paint(group, shade) {
+function paintVertices(group, shade) {
+  for (const mesh of group.children) {
+    const { tileOf, base } = mesh.userData;
+    const attr = mesh.geometry.attributes.color;
+    for (let v = 0; v < tileOf.length; v++) {
+      const s = shade(tileOf[v]);
+      attr.array[v * 3] = base[v * 3] * s;
+      attr.array[v * 3 + 1] = base[v * 3 + 1] * s;
+      attr.array[v * 3 + 2] = base[v * 3 + 2] * s;
+    }
+    attr.needsUpdate = true;
+  }
+}
+
+/** The instanced version, for the scatter and resource layers. */
+function paintInstances(group, shade) {
   for (const mesh of group.children) {
     const { indices, base } = mesh.userData;
     indices.forEach((tile, n) => {
@@ -247,6 +387,38 @@ function paint(group, shade) {
     });
     mesh.instanceColor.needsUpdate = true;
   }
+}
+
+/**
+ * A mountain peak: a cone with its vertices pushed off the cone, and a snow
+ * line baked into the vertex colours.
+ *
+ * A smooth cone reads as an ice-cream cone at any scale. What says "mountain"
+ * is an irregular silhouette and a pale cap over a dark base - the two things
+ * both Freeciv's sprites and Civ's models lean on. The displacement is derived
+ * from vertex position, so the same peak comes out identical on every replay,
+ * and the geometry is indexed, so neighbouring faces move together and the
+ * surface never cracks open.
+ */
+function crag() {
+  const geo = new THREE.CylinderGeometry(0.02, 0.7, 1.3, 7, 3);
+  geo.translate(0, 0.65, 0);
+  const pos = geo.attributes.position;
+  const rock = new THREE.Color(0x6b6873);
+  const snow = new THREE.Color(0xf1f4f9);
+  const colours = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const n = rand(Math.round((x * 911 + z * 1373 + y * 577) * 64));
+    pos.setXYZ(i, x * (1 + (n - 0.5) * 0.6), y * (0.92 + n * 0.16), z * (1 + (n - 0.5) * 0.6));
+    const t = Math.min(1, Math.max(0, (pos.getY(i) - 0.78) / 0.4));
+    scratch.copy(rock).lerp(snow, t).toArray(colours, i * 3);
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colours, 3));
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /** Trees, peaks and scrub standing on the terrain. */
@@ -258,18 +430,13 @@ export function buildScatter(tiles, terrain) {
     cyl(0, 0.19, 0.42, 7).translate(0, 0.78, 0),
     cyl(0.045, 0.055, 0.2, 5).translate(0, 0.1, 0),
   ]);
-  // Translated up by half their height, because a cylinder is built centred on
-  // the origin: an untranslated cone sits half-buried in the tile it stands on.
-  // That is what made mountains read as pebbles scattered on a grey plateau
-  // rather than as a range - only the top half of an already-short cone showed.
-  const peak = cyl(0.03, 0.72, 1.4, 6).translate(0, 0.7, 0);
   const scrub = cyl(0, 0.13, 0.2, 5).translate(0, 0.1, 0);
 
   const kinds = [
     { geo: pine, colour: 0x2f5f34, on: "forest", per: 3, spread: 0.42 },
-    // Two overlapping peaks per tile at different scales, so a mountain range
-    // has a broken skyline instead of a row of identical cones.
-    { geo: peak, colour: 0xbfc4cd, on: "mountains", per: 2, spread: 0.34 },
+    // Three overlapping peaks per tile at different scales, so a range has a
+    // broken skyline instead of a row of identical cones.
+    { geo: crag(), colour: 0xffffff, on: "mountains", per: 3, spread: 0.36, tinted: true },
     { geo: scrub, colour: 0x7d9450, on: "grassland", per: 2, spread: 0.5 },
     { geo: scrub, colour: 0x9c8f5a, on: "desert", per: 1, spread: 0.5 },
   ];
@@ -283,7 +450,9 @@ export function buildScatter(tiles, terrain) {
 
     const mesh = new THREE.InstancedMesh(
       kind.geo,
-      new THREE.MeshLambertMaterial({ flatShading: true }),
+      // A tinted kind carries its own vertex colours - snow over rock - and
+      // takes white as its instance colour so fog can still darken it.
+      new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: !!kind.tinted }),
       targets.length * kind.per
     );
     const indices = [];
@@ -313,7 +482,7 @@ export function buildScatter(tiles, terrain) {
     mesh.userData = { indices, base };
     group.add(mesh);
   }
-  group.userData.paint = (shade) => paint(group, shade);
+  group.userData.paint = (shade) => paintInstances(group, shade);
   return group;
 }
 
@@ -394,7 +563,7 @@ export function buildResources(tiles, terrain, resources) {
     mesh.userData = { indices: targets, base };
     group.add(mesh);
   }
-  group.userData.paint = (shade) => paint(group, shade);
+  group.userData.paint = (shade) => paintInstances(group, shade);
   return group;
 }
 
@@ -465,100 +634,312 @@ export function buildBorders(tiles, owners, heightOf, colourOf, visible) {
 // Units
 // ---------------------------------------------------------------------------
 
-const PAWN = () =>
-  mergeGeometries([
-    cyl(0.11, 0.17, 0.34, 8).translate(0, 0.17, 0),
-    new THREE.SphereGeometry(0.115, 8, 6).translate(0, 0.42, 0),
-  ]);
+/**
+ * Units are people, not tokens.
+ *
+ * The previous models were chess pawns - a tapered cylinder with a sphere on
+ * top - and they read as pieces on a board because that is exactly what they
+ * were. Texture would not have fixed that. Three things make a unit read as a
+ * character instead, and none of them is resolution:
+ *
+ *  1. **More than one of them.** Civ puts three to six figures on a tile. One
+ *     figure is a game piece; a squad is an army.
+ *  2. **Human articulation.** Head, torso, two arms, two legs, a held weapon.
+ *     Even at ~120 triangles that silhouette is unmistakably a person.
+ *  3. **Material separation.** Skin, cloth, leather and steel at different
+ *     values. A model in one flat colour is a token no matter its shape.
+ *
+ * Point 3 is why every model is split in two. `InstancedMesh.setColorAt`
+ * multiplies the *whole* mesh, so tinting a unit by its civ colour tinted the
+ * soldier's skin and his sword blade too - which is most of why they looked
+ * like counters. The `body` half carries baked vertex colours and is never
+ * tinted; the `livery` half - tunics, shields, sails, wagon canvas - is the
+ * only part that takes the civ colour. Two draw calls per unit type.
+ */
+const SKIN = 0xc08a5e;
+const LEATHER = 0x6b4a2f;
+const WOOD = 0x8a6338;
+const STEEL = 0xb4bcc6;
+const HORSEHIDE = 0x6f4b31;
+const FUR = 0x6e6a63;
+const EMBER = 0xff8a3d;
+
+const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+
+/** Paint every vertex of a part one colour, so parts of different materials
+ *  can be merged into a single geometry and still shade separately. */
+function tint(geo, hex) {
+  const c = new THREE.Color(hex);
+  const n = geo.attributes.position.count;
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) c.toArray(arr, i * 3);
+  geo.setAttribute("color", new THREE.BufferAttribute(arr, 3));
+  return geo;
+}
+
+/** Move a finished set of parts into position on the tile. */
+function place(parts, x, z, yaw) {
+  for (const g of parts) {
+    if (yaw) g.rotateY(yaw);
+    g.translate(x, 0, z);
+  }
+  return parts;
+}
 
 /**
- * One merged low-poly model per unit type.
+ * One person, roughly 0.42 units tall against a hex of radius 1.
  *
- * Silhouette carries the meaning: at the zoom a spectator actually watches
- * from, a spear above the head or a hull below the waterline reads far faster
- * than any colour or icon could.
+ * `stride` and the arm angles are what give a squad the look of a formation
+ * rather than a row of identical statues - each figure is posed slightly
+ * differently by its index.
  */
-export function unitGeometry(type) {
-  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+function person({ stride = 0, leftArm = 0.12, rightArm = 0.12, scale = 1 } = {}) {
+  const body = [
+    tint(box(0.045, 0.17, 0.055).rotateX(stride).translate(-0.042, 0.085, 0), LEATHER),
+    tint(box(0.045, 0.17, 0.055).rotateX(-stride).translate(0.042, 0.085, 0), LEATHER),
+    tint(box(0.036, 0.15, 0.045).rotateZ(leftArm).translate(-0.086, 0.245, 0), SKIN),
+    tint(box(0.036, 0.15, 0.045).rotateZ(-rightArm).translate(0.086, 0.245, 0), SKIN),
+    // A faceted sphere, not a cube. A cube head is the single detail that makes
+    // a low-poly figure read as a toy block rather than as a person.
+    tint(new THREE.SphereGeometry(0.048, 6, 4).translate(0, 0.375, 0), SKIN),
+  ];
+  const livery = [box(0.128, 0.17, 0.085).translate(0, 0.25, 0)];
+  if (scale !== 1) for (const g of [...body, ...livery]) g.scale(scale, scale, scale);
+  return { body, livery };
+}
+
+// Weapons and kit. Held at the right hand, which sits at +x.
+const SPEAR = () => [
+  tint(cyl(0.011, 0.011, 0.54, 4).translate(0.105, 0.3, 0.02), WOOD),
+  tint(cyl(0, 0.026, 0.09, 4).translate(0.105, 0.6, 0.02), STEEL),
+];
+const SWORD = () => [
+  tint(box(0.022, 0.21, 0.05).rotateZ(-0.25).translate(0.13, 0.34, 0.02), STEEL),
+  tint(box(0.028, 0.04, 0.055).translate(0.105, 0.23, 0.02), LEATHER),
+];
+const CLUB = () => [
+  tint(cyl(0.014, 0.014, 0.24, 4).rotateZ(-0.5).translate(0.13, 0.3, 0.02), WOOD),
+  tint(box(0.06, 0.07, 0.06).translate(0.18, 0.4, 0.02), STEEL),
+];
+// Rotated so the arc straddles the hand rather than rising out of it - the
+// half-torus spans only +Y as built, which read as a horn above the head.
+const BOW = () => [
+  tint(new THREE.TorusGeometry(0.105, 0.011, 3, 9, Math.PI)
+    .rotateZ(-Math.PI / 2).rotateY(Math.PI / 2).translate(0.12, 0.27, 0.02), WOOD),
+];
+const TORCH = () => [
+  tint(cyl(0.012, 0.012, 0.28, 4).translate(0.12, 0.32, 0.02), WOOD),
+  tint(cyl(0, 0.04, 0.1, 5).translate(0.12, 0.5, 0.02), EMBER),
+];
+// Shields are livery, not body: a round disc of civ colour at chest height is
+// the single most legible identity cue on a battlefield seen from above. A
+// cylinder's axis is Y, so one rotateZ turns the disc to face forward (+x),
+// which is the direction every figure is built looking.
+const SHIELD = () => [
+  cyl(0.095, 0.095, 0.022, 8).rotateZ(Math.PI / 2).translate(0.02, 0.26, 0.11),
+];
+
+/** Four figures in a loose block, plus a fifth at the centre for larger units.
+ *  Spread wide enough to read as separate men at the zoom a match is watched
+ *  from; any tighter and a squad merges into one blob. */
+const FORMATION = [[-0.32, -0.26], [0.28, -0.32], [-0.26, 0.32], [0.32, 0.26], [0, 0]];
+
+function squad(count, make) {
+  const body = [];
+  const livery = [];
+  for (let k = 0; k < count; k++) {
+    const [x, z] = FORMATION[k % FORMATION.length];
+    const p = make(k);
+    // Each figure is turned a little differently, so a formation looks held
+    // rather than stamped.
+    place(p.body, x, z, ((k * 37) % 40) / 100 - 0.2);
+    place(p.livery, x, z, ((k * 37) % 40) / 100 - 0.2);
+    body.push(...p.body);
+    livery.push(...p.livery);
+  }
+  return { body, livery };
+}
+
+// A helmet is livery, and it earns its place twice: a second patch of civ
+// colour above the tunic, and a rounder silhouette at the top of the figure.
+const HELM = () => [
+  new THREE.SphereGeometry(0.054, 6, 3, 0, Math.PI * 2, 0, Math.PI / 1.9)
+    .translate(0, 0.372, 0),
+];
+
+const soldier = (k, kit, worn) => {
+  const p = person({ stride: (k % 3) * 0.12 - 0.12, rightArm: 0.3 });
+  p.body.push(...kit());
+  p.livery.push(...HELM());
+  if (worn) p.livery.push(...worn());
+  return p;
+};
+
+function horse(rider) {
+  const body = [
+    tint(box(0.32, 0.14, 0.13).translate(0, 0.3, 0), HORSEHIDE),
+    tint(box(0.09, 0.16, 0.09).rotateZ(-0.35).translate(0.16, 0.4, 0), HORSEHIDE),
+    tint(box(0.13, 0.075, 0.085).translate(0.24, 0.45, 0), HORSEHIDE),
+    ...[-0.11, 0.11].flatMap((x) => [0.05, -0.05].map((z) =>
+      tint(cyl(0.026, 0.022, 0.26, 5).translate(x, 0.13, z), HORSEHIDE))),
+  ];
+  const livery = [];
+  if (rider) {
+    const p = person({ stride: 0.5, scale: 0.85 });
+    for (const g of p.body) g.translate(-0.03, 0.34, 0);
+    for (const g of p.livery) g.translate(-0.03, 0.34, 0);
+    body.push(...p.body, ...SWORD().map((g) => g.translate(-0.03, 0.34, 0)));
+    livery.push(...p.livery);
+  }
+  return { body, livery };
+}
+
+/** Everything above is authored at a person height of ~0.42 because that keeps
+ *  the part offsets readable. This is the one place the whole model is scaled
+ *  to the board, so the figures can be resized without retuning every limb. */
+const UNIT_SCALE = 1.45;
+
+/** Built once per type: merging a squad on every turn step would be wasteful. */
+const models = new Map();
+
+export function unitModel(type) {
+  if (models.has(type)) return models.get(type);
+  const model = buildUnit(type);
+  const merge = (parts) => {
+    if (!parts.length) return null;
+    return mergeGeometries(parts).scale(UNIT_SCALE, UNIT_SCALE, UNIT_SCALE);
+  };
+  const merged = { body: merge(model.body), livery: merge(model.livery) };
+  models.set(type, merged);
+  return merged;
+}
+
+function buildUnit(type) {
   switch (type) {
-    case "settler":
-      return mergeGeometries([
-        box(0.42, 0.16, 0.26).translate(0, 0.16, 0),
-        cyl(0.16, 0.16, 0.4, 8, 1).rotateZ(Math.PI / 2).translate(0, 0.3, 0),
-        cyl(0.07, 0.07, 0.05, 8).rotateX(Math.PI / 2).translate(-0.16, 0.09, 0.14),
-        cyl(0.07, 0.07, 0.05, 8).rotateX(Math.PI / 2).translate(0.16, 0.09, 0.14),
-      ]);
-    case "worker":
-      return mergeGeometries([PAWN(), cyl(0.02, 0.02, 0.4, 5).rotateZ(0.5).translate(0.17, 0.3, 0)]);
-    case "scout":
-      return mergeGeometries([PAWN().scale(0.85, 1.05, 0.85)]);
     case "warrior":
-      return mergeGeometries([PAWN(), box(0.05, 0.24, 0.16).translate(-0.19, 0.28, 0)]);
-    case "archer":
-      return mergeGeometries([
-        PAWN(),
-        new THREE.TorusGeometry(0.17, 0.018, 4, 10, Math.PI).rotateY(Math.PI / 2).translate(0.18, 0.32, 0),
-      ]);
+      return squad(4, (k) => soldier(k, CLUB));
     case "spearman":
-      return mergeGeometries([
-        PAWN(),
-        cyl(0.018, 0.018, 0.6, 5).translate(0.18, 0.36, 0),
-        cyl(0, 0.05, 0.12, 4).translate(0.18, 0.68, 0),
-      ]);
+      return squad(4, (k) => soldier(k, SPEAR));
+    case "archer":
+      return squad(3, (k) => soldier(k, BOW));
     case "swordsman":
-      return mergeGeometries([
-        PAWN().scale(1.1, 1, 1.1),
-        box(0.04, 0.3, 0.06).translate(0.18, 0.38, 0),
-        box(0.14, 0.03, 0.05).translate(0.18, 0.25, 0),
-      ]);
-    case "horseman":
-      return mergeGeometries([
-        box(0.46, 0.2, 0.2).translate(0, 0.28, 0),
-        box(0.16, 0.22, 0.16).translate(0.24, 0.4, 0),
-        cyl(0.04, 0.04, 0.26).translate(-0.16, 0.13, 0.07),
-        cyl(0.04, 0.04, 0.26).translate(0.16, 0.13, 0.07),
-        cyl(0.04, 0.04, 0.26).translate(-0.16, 0.13, -0.07),
-        cyl(0.04, 0.04, 0.26).translate(0.16, 0.13, -0.07),
-        new THREE.SphereGeometry(0.1, 8, 6).translate(0, 0.52, 0),
-      ]);
-    case "catapult":
-      return mergeGeometries([
-        box(0.4, 0.1, 0.24).translate(0, 0.14, 0),
-        cyl(0.09, 0.09, 0.05, 10).rotateX(Math.PI / 2).translate(-0.15, 0.09, 0.13),
-        cyl(0.09, 0.09, 0.05, 10).rotateX(Math.PI / 2).translate(0.15, 0.09, 0.13),
-        cyl(0.025, 0.025, 0.45, 5).rotateZ(-0.9).translate(0.06, 0.34, 0),
-        new THREE.SphereGeometry(0.09, 7, 5).translate(0.24, 0.5, 0),
-      ]);
-    case "trireme":
-      return mergeGeometries([
-        cyl(0.14, 0.1, 0.62, 6).rotateZ(Math.PI / 2).translate(0, 0.12, 0),
-        cyl(0.02, 0.02, 0.52, 5).translate(0, 0.4, 0),
-        box(0.01, 0.3, 0.3).translate(0.02, 0.44, 0),
-      ]);
-    case "wolf":
-      return mergeGeometries([
-        box(0.34, 0.14, 0.14).translate(0, 0.2, 0),
-        box(0.14, 0.12, 0.12).translate(0.21, 0.24, 0),
-        cyl(0.03, 0.03, 0.18).translate(-0.11, 0.09, 0.05),
-        cyl(0.03, 0.03, 0.18).translate(0.11, 0.09, 0.05),
-        cyl(0.03, 0.03, 0.18).translate(-0.11, 0.09, -0.05),
-        cyl(0.03, 0.03, 0.18).translate(0.11, 0.09, -0.05),
-        cyl(0, 0.04, 0.14, 4).rotateZ(-0.7).translate(-0.2, 0.28, 0),
-      ]);
+      return squad(4, (k) => soldier(k, SWORD, SHIELD));
+    case "scout": {
+      const p = person({ stride: 0.35, leftArm: 0.4 });
+      p.body.push(tint(cyl(0.01, 0.01, 0.46, 4).translate(0.1, 0.26, 0.02), WOOD));
+      return p;
+    }
+    case "worker": {
+      const a = person({ stride: 0.1, rightArm: 0.8 });
+      a.body.push(tint(cyl(0.012, 0.012, 0.3, 4).rotateZ(-1).translate(0.16, 0.26, 0), WOOD));
+      a.body.push(tint(box(0.11, 0.03, 0.05).rotateZ(-1).translate(0.26, 0.34, 0), STEEL));
+      const b = person({ stride: -0.2 });
+      place(a.body, -0.12, 0.06, 0.3);
+      place(a.livery, -0.12, 0.06, 0.3);
+      place(b.body, 0.14, -0.08, -0.5);
+      place(b.livery, 0.14, -0.08, -0.5);
+      return { body: [...a.body, ...b.body], livery: [...a.livery, ...b.livery] };
+    }
+    case "settler": {
+      // A wagon with a civ-coloured canvas, two walkers alongside. The canopy
+      // is the largest single patch of civ colour on the board, which is what
+      // makes a settler easy to track across a continent.
+      const body = [
+        tint(box(0.36, 0.13, 0.21).translate(0, 0.22, 0), WOOD),
+        ...[-0.14, 0.14].flatMap((x) => [0.12, -0.12].map((z) =>
+          tint(cyl(0.075, 0.075, 0.028, 9).rotateX(Math.PI / 2).translate(x, 0.11, z), LEATHER))),
+      ];
+      const livery = [new THREE.CylinderGeometry(0.14, 0.14, 0.32, 9, 1, false, 0, Math.PI)
+        .rotateZ(Math.PI / 2).translate(0, 0.3, 0)];
+      const walker = person({ stride: 0.3, scale: 0.9 });
+      place(walker.body, 0.3, 0.12, -0.4);
+      place(walker.livery, 0.3, 0.12, -0.4);
+      return { body: [...body, ...walker.body], livery: [...livery, ...walker.livery] };
+    }
+    case "horseman": {
+      const body = [];
+      const livery = [];
+      for (const [k, [x, z]] of [[0, [-0.1, -0.1]], [1, [0.12, 0.12]]]) {
+        const h = horse(true);
+        place(h.body, x, z, k * 0.3 - 0.15);
+        place(h.livery, x, z, k * 0.3 - 0.15);
+        body.push(...h.body);
+        livery.push(...h.livery);
+      }
+      return { body, livery };
+    }
+    case "catapult": {
+      const body = [
+        tint(box(0.38, 0.09, 0.24).translate(0, 0.16, 0), WOOD),
+        ...[-0.13, 0.13].flatMap((x) => [0.13, -0.13].map((z) =>
+          tint(cyl(0.085, 0.085, 0.03, 10).rotateX(Math.PI / 2).translate(x, 0.09, z), LEATHER))),
+        tint(cyl(0.022, 0.022, 0.42, 5).rotateZ(-0.85).translate(0.05, 0.36, 0), WOOD),
+        tint(new THREE.SphereGeometry(0.075, 7, 5).translate(0.22, 0.52, 0), STEEL),
+      ];
+      const crew = [0, 1].map((k) => {
+        const p = person({ stride: 0.2, rightArm: 0.9, scale: 0.9 });
+        place(p.body, -0.26, k ? 0.16 : -0.16, k ? 0.6 : -0.6);
+        place(p.livery, -0.26, k ? 0.16 : -0.16, k ? 0.6 : -0.6);
+        return p;
+      });
+      return {
+        body: [...body, ...crew.flatMap((p) => p.body)],
+        livery: crew.flatMap((p) => p.livery),
+      };
+    }
+    case "trireme": {
+      const body = [
+        tint(cyl(0.15, 0.1, 0.64, 6).rotateZ(Math.PI / 2).translate(0, 0.12, 0), WOOD),
+        tint(cyl(0.018, 0.018, 0.5, 5).translate(0, 0.38, 0), WOOD),
+        // Oars, which are what say "ship" rather than "boat-shaped object".
+        ...[-0.18, 0, 0.18].flatMap((x) => [0.13, -0.13].map((z) =>
+          tint(cyl(0.009, 0.009, 0.26, 4).rotateX(z > 0 ? 0.9 : -0.9).translate(x, 0.11, z), WOOD))),
+      ];
+      const livery = [box(0.012, 0.28, 0.3).translate(0.01, 0.42, 0)];
+      const rower = person({ scale: 0.7 });
+      place(rower.body, -0.1, 0, 0);
+      place(rower.livery, -0.1, 0, 0);
+      for (const g of [...rower.body, ...rower.livery]) g.translate(0, 0.1, 0);
+      return { body: [...body, ...rower.body], livery: [...livery, ...rower.livery] };
+    }
+    case "wolf": {
+      const body = [];
+      for (const [k, [x, z]] of [[0, [-0.14, -0.1]], [1, [0.14, 0.12]]]) {
+        const parts = [
+          tint(box(0.3, 0.12, 0.12).translate(0, 0.19, 0), FUR),
+          tint(box(0.13, 0.11, 0.11).translate(0.19, 0.23, 0), FUR),
+          tint(cyl(0, 0.035, 0.13, 4).rotateZ(-0.7).translate(-0.18, 0.26, 0), FUR),
+          ...[-0.1, 0.1].flatMap((bx) => [0.045, -0.045].map((bz) =>
+            tint(cyl(0.024, 0.02, 0.19, 4).translate(bx, 0.09, bz), FUR))),
+        ];
+        body.push(...place(parts, x, z, k * 0.8 - 0.4));
+      }
+      return { body, livery: [] };
+    }
     case "barbarian":
-      return mergeGeometries([
-        PAWN().scale(1.05, 1.05, 1.05),
-        cyl(0, 0.09, 0.2, 4).translate(0.19, 0.46, 0),
-        cyl(0.02, 0.02, 0.42, 5).translate(0.19, 0.28, 0),
-      ]);
+      return squad(3, (k) => {
+        const p = person({ stride: (k % 2) * 0.3 - 0.15, rightArm: 0.5 });
+        p.body.push(...(k === 1 ? TORCH() : CLUB()));
+        return p;
+      });
     default:
-      return PAWN();
+      return squad(2, (k) => soldier(k, CLUB));
   }
 }
 
-/** A ring marking which civ a unit belongs to, read at any camera angle. */
+/**
+ * A ring marking which civ a unit belongs to, read at any camera angle.
+ *
+ * An outline rather than a filled disc. As a disc it was a saucer of solid civ
+ * colour wider than the men standing on it, and it took over the tile now that
+ * the figures carry their own livery.
+ *
+ * Wide enough to enclose the formation: at the old radius the outer men of a
+ * squad stood outside their own marker, which read as several separate units
+ * rather than one.
+ */
 export function baseGeometry() {
-  return new THREE.CylinderGeometry(0.26, 0.26, 0.035, 12);
+  return new THREE.TorusGeometry(0.64, 0.022, 4, 20).rotateX(Math.PI / 2);
 }
 
 // ---------------------------------------------------------------------------

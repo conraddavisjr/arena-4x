@@ -96,7 +96,7 @@ import { OrbitControls } from "three/OrbitControls.js";
 import {
   HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
   buildTerrain, buildScatter, buildResources, buildBorders,
-  unitGeometry, baseGeometry,
+  unitModel, baseGeometry,
   houseGeometry, towerGeometry, wallGeometry, cityLayout,
 } from "./world.js";
 
@@ -322,21 +322,33 @@ async function drawTurn() {
   bases.castShadow = false;
   dynamicLayer.add(bases);
 
+  // Two meshes per unit type. `body` carries baked vertex colours - skin,
+  // leather, wood, steel - and is never tinted, because instance colour
+  // multiplies the whole mesh and tinting a soldier by his civ colour used to
+  // tint his skin and his sword blade with it. `livery` is the tunics, shields
+  // and sails, and is the only part that takes the civ colour.
   for (const type of UNIT_TYPES) {
     const of = visible.filter((u) => u.type === type);
     if (!of.length) continue;
-    const mesh = instanced(unitGeometry(type), of.length);
-    of.forEach((u, n) => {
-      const [x, , z] = at(u.at);
-      // Face the board centre, so armies read as oriented rather than scattered.
-      M.makeRotationY(Math.atan2(-x, -z)).setPosition(x, topOf(u.at) + (u.embarked ? -0.06 : 0.02), z);
-      mesh.setMatrixAt(n, M);
-      const base = new THREE.Color(hexOf(u.owner));
-      // Wounded units darken, so a battered stack is visible without a UI probe.
-      mesh.setColorAt(n, base.lerp(new THREE.Color(0x2a1216), (100 - u.hp) / 220));
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    dynamicLayer.add(mesh);
+    const model = unitModel(type);
+    for (const [geo, civ] of [[model.body, false], [model.livery, true]]) {
+      if (!geo) continue;
+      const mesh = instanced(geo, of.length, civ ? {} : { vertexColors: true });
+      of.forEach((u, n) => {
+        const [x, , z] = at(u.at);
+        // Face the board centre, so armies read as oriented rather than scattered.
+        M.makeRotationY(Math.atan2(-x, -z))
+          .setPosition(x, topOf(u.at) + (u.embarked ? -0.06 : 0.01), z);
+        mesh.setMatrixAt(n, M);
+        // Wounded units darken, so a battered stack is visible without a UI
+        // probe. On the body that multiplies the baked colours; on the livery
+        // it darkens the civ colour.
+        C.setHex(civ ? hexOf(u.owner) : 0xffffff);
+        mesh.setColorAt(n, C.lerp(new THREE.Color(0x2a1216), (100 - u.hp) / 220));
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      dynamicLayer.add(mesh);
+    }
   }
 }
 
