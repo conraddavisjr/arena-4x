@@ -1,0 +1,638 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ARENA-4X replay</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  The replay viewer.
+
+  A pure function of the bundle: it loads match.json plus one turn at a time and
+  renders. It has no API client, no keys, no writes, and no branch of the game
+  other than the one that happened - a visitor can scrub, focus a civ and read,
+  and nothing else exists to do. "Live" is the same page pointed at a bundle
+  that is still growing.
+
+  Deliberately dependency-free and single-file so it can be dropped onto a
+  static host, embedded in an iframe, or inlined into a page without a build
+  step.
+-->
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --line: #232a34;
+    --ink: #e6edf3; --dim: #8b949e; --faint: #4d5560;
+    --c0: #4ade80; --c1: #fbbf24; --c2: #38bdf8; --c3: #f472b6;
+    --wild: #a1a1aa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: grid; grid-template-columns: minmax(0,1fr) 380px; height: 100vh; overflow: hidden;
+  }
+  @media (max-width: 900px) { body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  aside { border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); flex-wrap: wrap;
+  }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  .modes { display: flex; gap: 2px; }
+  button {
+    background: #1f2630; color: var(--ink); border: 1px solid var(--line);
+    padding: 5px 10px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  button:hover { background: #2a323d; }
+  button[aria-pressed="true"] { background: #2f6feb; border-color: #2f6feb; }
+  button:disabled { opacity: .4; cursor: default; }
+
+  #board { flex: 1; min-height: 0; display: block; }
+  .scrub { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-top: 1px solid var(--line); }
+  input[type=range] { flex: 1; accent-color: #2f6feb; }
+  .turn { font-variant-numeric: tabular-nums; min-width: 92px; color: var(--dim); }
+
+  section { border-bottom: 1px solid var(--line); padding: 12px 14px; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+       margin: 0 0 8px; font-weight: 600; }
+  .civ { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dead { opacity: .4; text-decoration: line-through; }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 3px 4px; }
+  td.name { width: 44%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  th, td { font-size: 12px; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--dim); font-weight: 500; font-size: 11px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover { background: #1c222c; }
+  .neg { color: #f87171; } .pos { color: #4ade80; }
+
+  .matrix { border-collapse: collapse; margin-top: 4px; }
+  .matrix td, .matrix th { width: 26px; height: 22px; text-align: center; padding: 0;
+                           border: 1px solid var(--line); font-size: 11px; }
+  .matrix .self { background: #11151b; }
+
+  .feed { display: grid; gap: 8px; }
+  .card { background: #11161d; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .card .who { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 4px; }
+  .card p { margin: 2px 0; color: var(--dim); }
+  .card p.plan { color: var(--ink); }
+
+  .msg { border-left: 2px solid var(--line); padding: 4px 0 4px 8px; margin-bottom: 6px; }
+  .msg.private { border-left-color: #f472b6; }
+  .msg .meta { color: var(--faint); font-size: 11px; }
+  .tick { color: var(--dim); padding: 1px 0; }
+  .tick b { color: var(--ink); font-weight: 500; }
+  .empty { color: var(--faint); font-style: italic; }
+  .hint { color: var(--faint); font-size: 11px; margin-top: 6px; }
+</style>
+
+<main>
+  <header>
+    <h1>ARENA-4X</h1>
+    <div class="modes" id="modes"></div>
+    <button id="play">▶ Play</button>
+    <span class="turn" id="status"></span>
+  </header>
+  <svg id="board"></svg>
+  <div class="scrub">
+    <button id="prev">‹</button>
+    <input type="range" id="slider" min="1" value="1">
+    <button id="next">›</button>
+    <span class="turn" id="turnLabel"></span>
+  </div>
+</main>
+
+<aside>
+  <section><h2>Empires</h2><div id="economy"></div></section>
+  <section><h2>Contact</h2><div id="contact"></div>
+    <div class="hint">Row sees column. Asymmetry means one side is watching unseen.</div></section>
+  <section><h2>Reasoning</h2><div class="feed" id="reasoning"></div></section>
+  <section><h2>Diplomacy</h2><div id="messages"></div></section>
+  <section><h2>Events</h2><div id="events"></div></section>
+</aside>
+
+<script type="module">
+const BASE = new URLSearchParams(location.search).get("match") || ".";
+const COLOURS = ["var(--c0)", "var(--c1)", "var(--c2)", "var(--c3)"];
+// Base ground colour under the drawn detail. Muted on purpose: the glyphs
+// carry the readability now, and saturated ground fought with them.
+const TERRAIN = {
+  ocean: "#123049", coast: "#1a4a68", grassland: "#4a7038", plains: "#8a7f42",
+  forest: "#335c33", hills: "#7a6a49", desert: "#b39d5f", mountains: "#585862",
+};
+
+// ---------------------------------------------------------------------------
+// The world, drawn.
+//
+// Every glyph is an inline SVG <symbol> in a 10x10 box, instanced with <use>.
+// Symbols rather than repeated paths because the board is ~1000 tiles: defining
+// a pine stand once and referencing it a hundred times keeps the DOM small
+// enough to re-render on every scrub without stutter.
+//
+// Deliberately no external art. The export has to stay a single self-contained
+// file that can be dropped into a page, and a spritesheet - however much better
+// it would look - is a second asset to host and a CSP surface. If this is ever
+// upgraded to real sprite art, this is the one function that changes.
+// ---------------------------------------------------------------------------
+const SYMBOLS = `
+<defs>
+  <symbol id="g-forest" viewBox="0 0 10 10">
+    <path d="M2.6 7.4 L1.3 7.4 L2.6 4.6 L2 4.6 L3.2 2.2 L4.4 4.6 L3.8 4.6 L5.1 7.4 L3.8 7.4 Z" fill="#1e4022"/>
+    <rect x="2.95" y="7.2" width=".5" height="1.1" fill="#3a2a1c"/>
+    <path d="M6.4 8.2 L5.3 8.2 L6.4 5.9 L5.9 5.9 L6.9 3.9 L7.9 5.9 L7.4 5.9 L8.5 8.2 L7.4 8.2 Z" fill="#255028"/>
+    <rect x="6.7" y="8" width=".4" height="1" fill="#3a2a1c"/>
+  </symbol>
+  <symbol id="g-mountain" viewBox="0 0 10 10">
+    <path d="M.8 8.6 L4 2.4 L7.2 8.6 Z" fill="#5b5b66"/>
+    <path d="M4 2.4 L5.4 5.1 L4 5.6 L2.6 5.1 Z" fill="#d8dbe2"/>
+    <path d="M5.6 8.6 L7.8 4.4 L9.6 8.6 Z" fill="#4c4c56"/>
+    <path d="M7.8 4.4 L8.7 6.2 L7.8 6.5 L6.9 6.2 Z" fill="#c2c6cf"/>
+  </symbol>
+  <symbol id="g-hills" viewBox="0 0 10 10">
+    <path d="M.6 8 Q3 3.6 5.4 8 Z" fill="#7a6b4a"/>
+    <path d="M4.8 8 Q7 4.8 9.4 8 Z" fill="#6b5d40"/>
+  </symbol>
+  <symbol id="g-desert" viewBox="0 0 10 10">
+    <path d="M1 7.2 Q3 5.9 5 7.2" stroke="#c9ab6a" stroke-width=".7" fill="none" stroke-linecap="round"/>
+    <path d="M4.6 8.8 Q6.6 7.5 8.8 8.8" stroke="#c9ab6a" stroke-width=".7" fill="none" stroke-linecap="round"/>
+    <path d="M7.6 5.6 v-2 M6.9 4.5 q.7-.6 .7-1.4 M8.3 4.9 q-.7-.6-.7-1.5" stroke="#5f7c46" stroke-width=".55" fill="none" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="g-grass" viewBox="0 0 10 10">
+    <path d="M2.2 8 q.5-1.6 .1-2.6 M3.4 8 q.2-1.4 .9-2.2 M6.4 8.4 q.4-1.5 0-2.5 M7.6 8.4 q.2-1.3 .9-2"
+      stroke="#5d8a3e" stroke-width=".6" fill="none" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="g-plains" viewBox="0 0 10 10">
+    <path d="M2 6.6 h1.8 M5.6 5.4 h1.8 M3.6 8.2 h1.8" stroke="#a89a52" stroke-width=".55" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="g-water" viewBox="0 0 10 10">
+    <path d="M1.4 4.4 q1.2-.9 2.4 0 t2.4 0 t2.4 0 M1.4 6.6 q1.2-.9 2.4 0 t2.4 0 t2.4 0"
+      stroke="#8fc4e8" stroke-width=".5" fill="none" opacity=".5" stroke-linecap="round"/>
+  </symbol>
+
+  <symbol id="g-farm" viewBox="0 0 10 10">
+    <rect x="2" y="3.4" width="6" height="3.4" rx=".3" fill="#b7913f" opacity=".85"/>
+    <path d="M2 4.5 h6 M2 5.6 h6" stroke="#7d5f24" stroke-width=".35"/>
+  </symbol>
+  <symbol id="g-mine" viewBox="0 0 10 10">
+    <path d="M3 7 h4 l-.7-2.2 H3.7 Z" fill="#57544e"/>
+    <path d="M4.2 7 v-1.4 h1.6 V7" fill="#2b2926"/>
+  </symbol>
+  <symbol id="g-boats" viewBox="0 0 10 10">
+    <path d="M2.6 6.4 h4.8 l-.9 1.4 H3.5 Z" fill="#8a6b3f"/>
+    <path d="M5 6.2 V3.6 l2 1.4 -2 .8" fill="#e8e2d2"/>
+  </symbol>
+  <symbol id="g-road" viewBox="0 0 10 10">
+    <path d="M0 5.6 q3-1.6 5-.2 t5-.6" stroke="#9a8b6d" stroke-width="1" fill="none" opacity=".65"/>
+  </symbol>
+
+  <!-- Units. Silhouettes rather than icons: at this size the shape of the
+       thing - a rider, a bow, a hull, a wolf's back - reads faster than any
+       symbol would. -->
+  <symbol id="u-settler" viewBox="0 0 10 10">
+    <path d="M2.2 6.6 h5.6 l-.7 1.6 H2.9 Z" fill="#e6d8b8"/>
+    <path d="M2.6 6.6 q2.4-3 4.8 0" fill="none" stroke="#f5efdf" stroke-width="1.1"/>
+    <circle cx="3.4" cy="8.4" r=".6" fill="#3a2a1c"/><circle cx="6.6" cy="8.4" r=".6" fill="#3a2a1c"/>
+  </symbol>
+  <symbol id="u-worker" viewBox="0 0 10 10">
+    <circle cx="5" cy="2.8" r="1.1" fill="#e8c9a0"/>
+    <path d="M5 3.9 v3.2 M5 4.8 l-1.6 1.4 M5 4.8 l1.6 1 M5 7.1 l-1.2 2 M5 7.1 l1.2 2" stroke="#d9a86a" stroke-width=".8" stroke-linecap="round" fill="none"/>
+    <path d="M6.6 5.8 l1.6-1.8" stroke="#8a6b3f" stroke-width=".7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="u-scout" viewBox="0 0 10 10">
+    <circle cx="5" cy="2.6" r="1" fill="#e8c9a0"/>
+    <path d="M5 3.6 v3 M5 4.4 l-1.5 1.2 M5 4.4 l1.5 .8 M5 6.6 l-1.3 2.2 M5 6.6 l1.3 2.2" stroke="#c9d8a0" stroke-width=".8" stroke-linecap="round" fill="none"/>
+  </symbol>
+  <symbol id="u-warrior" viewBox="0 0 10 10">
+    <circle cx="4.6" cy="2.6" r="1" fill="#e8c9a0"/>
+    <path d="M4.6 3.6 v3.1 M4.6 6.7 l-1.2 2.1 M4.6 6.7 l1.2 2.1" stroke="#cfd6e0" stroke-width=".85" stroke-linecap="round" fill="none"/>
+    <path d="M7 3 v4.4" stroke="#8a6b3f" stroke-width=".7" stroke-linecap="round"/>
+    <path d="M2.6 4.2 h1.6 v2.2 H2.6 Z" fill="#b45a3c"/>
+  </symbol>
+  <symbol id="u-archer" viewBox="0 0 10 10">
+    <circle cx="4.4" cy="2.6" r="1" fill="#e8c9a0"/>
+    <path d="M4.4 3.6 v3.1 M4.4 6.7 l-1.2 2.1 M4.4 6.7 l1.2 2.1" stroke="#a8c98a" stroke-width=".85" stroke-linecap="round" fill="none"/>
+    <path d="M7 2.6 q1.6 2.4 0 4.8" stroke="#8a6b3f" stroke-width=".65" fill="none"/>
+    <path d="M7 2.6 L7 7.4" stroke="#e8e2d2" stroke-width=".35"/>
+  </symbol>
+  <symbol id="u-spearman" viewBox="0 0 10 10">
+    <circle cx="4.4" cy="2.6" r="1" fill="#e8c9a0"/>
+    <path d="M4.4 3.6 v3.1 M4.4 6.7 l-1.2 2.1 M4.4 6.7 l1.2 2.1" stroke="#cfd6e0" stroke-width=".85" stroke-linecap="round" fill="none"/>
+    <path d="M7.2 1.6 v6.4" stroke="#8a6b3f" stroke-width=".6"/>
+    <path d="M7.2 1.4 l.7 1.2 h-1.4 Z" fill="#dfe4ec"/>
+  </symbol>
+  <symbol id="u-swordsman" viewBox="0 0 10 10">
+    <circle cx="4.4" cy="2.6" r="1" fill="#e8c9a0"/>
+    <path d="M4.4 3.6 v3.1 M4.4 6.7 l-1.2 2.1 M4.4 6.7 l1.2 2.1" stroke="#cfd6e0" stroke-width=".9" stroke-linecap="round" fill="none"/>
+    <path d="M7.2 2 v4" stroke="#e8eef8" stroke-width=".7"/>
+    <path d="M6.4 5.9 h1.7" stroke="#c9a227" stroke-width=".55"/>
+    <path d="M2.4 4 h1.7 v2.4 H2.4 Z" fill="#7f8c9b"/>
+  </symbol>
+  <symbol id="u-horseman" viewBox="0 0 10 10">
+    <path d="M1.8 7.4 q.6-2.2 3-2.2 h2.2 q1.2 0 1.4 1.2 l-.5 1 h-.9 l-.3-.8 H4.2 l-.4 .8 H2.4 Z" fill="#8a5a34"/>
+    <path d="M7.4 5.2 l1.4-1.6 .6 1 -1 1.2" fill="#8a5a34"/>
+    <circle cx="4.6" cy="3.2" r=".9" fill="#e8c9a0"/>
+    <path d="M4.6 4.1 v1.4" stroke="#cfd6e0" stroke-width=".8"/>
+  </symbol>
+  <symbol id="u-catapult" viewBox="0 0 10 10">
+    <path d="M2 7.6 h6" stroke="#6b4f2c" stroke-width=".9"/>
+    <circle cx="3.2" cy="8.2" r=".9" fill="#4a381f"/><circle cx="6.8" cy="8.2" r=".9" fill="#4a381f"/>
+    <path d="M3.4 7.4 L6.6 3.4" stroke="#8a6b3f" stroke-width=".8"/>
+    <circle cx="6.8" cy="3.1" r="1" fill="#57544e"/>
+  </symbol>
+  <symbol id="u-trireme" viewBox="0 0 10 10">
+    <path d="M1.4 6.4 h7.2 l-1.2 1.8 H2.6 Z" fill="#7d5f34"/>
+    <path d="M5 6.2 V2.6" stroke="#6b4f2c" stroke-width=".5"/>
+    <path d="M5.2 2.8 h2.6 l-.8 1.5 .8 1.4 H5.2 Z" fill="#e8e2d2"/>
+    <path d="M2 8.6 q3 .7 6 0" stroke="#8fc4e8" stroke-width=".5" fill="none" opacity=".8"/>
+  </symbol>
+  <symbol id="u-wolf" viewBox="0 0 10 10">
+    <path d="M1.8 7.2 q1-1.8 2.8-1.8 h2.2 q1 0 1.4 .8 l-.4 1.4 h-.8 l-.3-.7 H4.4 l-.3 .7 H2.2 Z" fill="#6b6f78"/>
+    <path d="M7.6 5.6 l1-1.2 .3 .9 -.7 .9" fill="#6b6f78"/>
+    <path d="M8.2 4.6 l-.3-.9 .8 .5" fill="#6b6f78"/>
+    <circle cx="8.5" cy="5" r=".22" fill="#f0d264"/>
+    <path d="M1.9 6.2 l-1 -.9 .3 1.3" fill="#6b6f78"/>
+  </symbol>
+  <symbol id="u-barbarian" viewBox="0 0 10 10">
+    <circle cx="4.6" cy="2.6" r="1.05" fill="#c9a184"/>
+    <path d="M4.6 3.6 v3.1 M4.6 6.7 l-1.3 2.1 M4.6 6.7 l1.3 2.1" stroke="#8f5f4a" stroke-width=".9" stroke-linecap="round" fill="none"/>
+    <path d="M7.2 2.4 l1 1.6 -1.6 .6 Z" fill="#a03e2c"/>
+    <path d="M6.8 4.4 L5.4 6.4" stroke="#6b4f2c" stroke-width=".6"/>
+  </symbol>
+
+  <!-- Resources -->
+  <symbol id="r-wheat" viewBox="0 0 10 10"><path d="M5 8 V4 M5 4.6 l-1.4-1 M5 4.6 l1.4-1 M5 6 l-1.4-1 M5 6 l1.4-1" stroke="#e0b93c" stroke-width=".7" stroke-linecap="round" fill="none"/></symbol>
+  <symbol id="r-iron" viewBox="0 0 10 10"><path d="M3 6.6 l2-2.6 2 2.6 -2 1.4 Z" fill="#9aa4b0"/></symbol>
+  <symbol id="r-horses" viewBox="0 0 10 10"><path d="M3 7.6 q.4-2 2.4-2.4 l1.2-1.6 .8 .8 -.8 1.4 q1 .6 .8 1.8" stroke="#c98a4a" stroke-width=".9" fill="none" stroke-linecap="round"/></symbol>
+  <symbol id="r-gold_ore" viewBox="0 0 10 10"><circle cx="5" cy="6" r="1.5" fill="#e6c34a"/><circle cx="6.6" cy="5" r="1" fill="#f0d264"/></symbol>
+  <symbol id="r-deer" viewBox="0 0 10 10"><path d="M3.4 7.8 q.4-2 2-2.2 l.2-1.4 M5.6 4.2 l-1-1.2 M5.6 4.2 l1.2-1" stroke="#b5804a" stroke-width=".8" fill="none" stroke-linecap="round"/></symbol>
+  <symbol id="r-fish" viewBox="0 0 10 10"><path d="M3 6 q1.6-1.6 3.4 0 -1.8 1.6 -3.4 0 Z" fill="#7fd0e0"/><path d="M6.4 6 l1.4-1 v2 Z" fill="#7fd0e0"/></symbol>
+</defs>`;
+
+// Which glyph decorates which terrain, and how many of them.
+const DECOR = {
+  forest: ["g-forest", 2], mountains: ["g-mountain", 1], hills: ["g-hills", 1],
+  desert: ["g-desert", 1], grassland: ["g-grass", 1], plains: ["g-plains", 1],
+  ocean: ["g-water", 1], coast: ["g-water", 1],
+};
+const IMPROVEMENT_GLYPH = { farm: "g-farm", mine: "g-mine", road: "g-road", fishing_boats: "g-boats" };
+
+const state = { match: null, frame: null, turn: 1, mode: "god", focus: null, playing: null };
+const cache = new Map();
+
+const $ = (id) => document.getElementById(id);
+const civOf = (id) => state.match.civs.find((c) => c.player_id === id);
+const colourOf = (id) => (civOf(id) ? COLOURS[civOf(id).colour % 4] : "var(--wild)");
+const nameOf = (id) => (civOf(id) ? civOf(id).civ_name : "Wilderness");
+
+async function loadFrame(turn) {
+  if (cache.has(turn)) return cache.get(turn);
+  const res = await fetch(`${BASE}/turns/${String(turn).padStart(4, "0")}.json`);
+  if (!res.ok) throw new Error(`turn ${turn} missing`);
+  const frame = await res.json();
+  cache.set(turn, frame);
+  return frame;
+}
+
+// Terrain, borders and improvements are deltas in the bundle, so replaying from
+// turn 1 to the requested turn is how the board is reconstructed. Cheap because
+// frames are small and cached, and it keeps the bundle a fraction of the size
+// full snapshots would be.
+async function boardAt(turn) {
+  const owners = new Array(state.match.terrain.length).fill(null);
+  const improvements = {};
+  for (let t = 1; t <= turn; t++) {
+    const frame = await loadFrame(t);
+    for (const [i, who] of Object.entries(frame.owners || {})) owners[+i] = who;
+    Object.assign(improvements, frame.improvements || {});
+  }
+  return { owners, improvements };
+}
+
+function hexPoints(cx, cy, size) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 180) * (60 * i - 30);
+    pts.push(`${(cx + size * Math.cos(a)).toFixed(1)},${(cy + size * Math.sin(a)).toFixed(1)}`);
+  }
+  return pts.join(" ");
+}
+
+function layout() {
+  const coords = state.match.tiles.map((k) => k.split(",").map(Number));
+  // Larger than the flat version needed - drawn detail needs room to read.
+  const size = 16;
+  const pts = coords.map(([q, r]) => [size * Math.sqrt(3) * (q + r / 2), size * 1.5 * r]);
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return {
+    size, pts,
+    box: [Math.min(...xs) - size, Math.min(...ys) - size,
+          Math.max(...xs) - Math.min(...xs) + size * 2, Math.max(...ys) - Math.min(...ys) + size * 2],
+  };
+}
+
+let LAYOUT = null;
+let NEIGHBOURS = null;
+
+// Adjacency by tile index, built once. Used to find the edge of a vision field.
+function buildNeighbours() {
+  const at = new Map(state.match.tiles.map((k, i) => [k, i]));
+  const dirs = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+  return state.match.tiles.map((key) => {
+    const [q, r] = key.split(",").map(Number);
+    return dirs.map(([dq, dr]) => {
+      const found = at.get(`${q + dq},${r + dr}`);
+      return found === undefined ? null : found;
+    });
+  });
+}
+
+function nearest(from, target) {
+  if (!from.length) return null;
+  const { pts } = LAYOUT;
+  const [tx, ty] = pts[target];
+  let best = null, bestD = Infinity;
+  for (const i of from) {
+    const [x, y] = pts[i];
+    const d = (x - tx) ** 2 + (y - ty) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+async function draw() {
+  const f = state.frame, m = state.match, { size, pts, box } = LAYOUT;
+  const { owners, improvements } = await boardAt(state.turn);
+  const svg = $("board");
+  svg.setAttribute("viewBox", box.join(" "));
+
+  // Which tiles are lit depends on the mode. God sees all; agent view is one
+  // civ's fog; contact view is god terrain with every civ's vision outlined.
+  let lit = null;
+  if (state.mode === "agent" && state.focus) lit = new Set(f.visibility[state.focus] || []);
+
+  const parts = [SYMBOLS];
+  const g = (id, cx, cy, w, extra = "") =>
+    `<use href="#${id}" x="${(cx - w / 2).toFixed(1)}" y="${(cy - w / 2).toFixed(1)}" width="${w}" height="${w}" ${extra}/>`;
+
+  // Ground first, then everything standing on it, so nothing is buried.
+  m.terrain.forEach((terrain, i) => {
+    const [x, y] = pts[i];
+    const seen = !lit || lit.has(i);
+    parts.push(`<polygon points="${hexPoints(x, y, size)}" fill="${seen ? TERRAIN[terrain] : "#0a0d12"}" stroke="#0b0e13" stroke-width=".4"/>`);
+    if (!seen) return;
+
+    // Terrain detail. Jittered off-centre by tile index rather than at random,
+    // so a forest looks like scattered stands instead of a stamped pattern -
+    // and so it does not shimmer when you scrub.
+    const [glyph, count] = DECOR[terrain] || [];
+    if (glyph) {
+      for (let k = 0; k < count; k++) {
+        const jx = ((i * 37 + k * 61) % 7 - 3) * size * .09;
+        const jy = ((i * 53 + k * 29) % 7 - 3) * size * .09;
+        parts.push(g(glyph, x + jx, y + jy, size * 1.55));
+      }
+    }
+    if (improvements[i] && IMPROVEMENT_GLYPH[improvements[i]]) {
+      parts.push(g(IMPROVEMENT_GLYPH[improvements[i]], x, y + size * .18, size * 1.3, 'opacity=".95"'));
+    }
+    if (m.resources[i]) parts.push(g(`r-${m.resources[i]}`, x + size * .42, y - size * .42, size * .95));
+    if (owners[i]) {
+      parts.push(`<polygon points="${hexPoints(x, y, size * .95)}" fill="none" stroke="${colourOf(owners[i])}" stroke-width="1.1" opacity=".5"/>`);
+    }
+  });
+
+  // Contact view: the *perimeter* of each civ's vision, hatched where fields
+  // overlap, plus a sightline to every rival asset actually being watched.
+  //
+  // Perimeter rather than every tile: outlining all of them turned four
+  // overlapping fields into noise you had to squint through. A civ's awareness
+  // reads as a shape when only its edge is drawn.
+  if (state.mode === "contact") {
+    const counts = new Map();
+    for (const [pid, tiles] of Object.entries(f.visibility)) {
+      const inField = new Set(tiles);
+      for (const i of tiles) counts.set(i, (counts.get(i) || 0) + 1);
+      for (const i of tiles) {
+        if (NEIGHBOURS[i].every((n) => n === null || inField.has(n))) continue;
+        const [x, y] = pts[i];
+        parts.push(`<polygon points="${hexPoints(x, y, size * .9)}" fill="none" stroke="${colourOf(pid)}" stroke-width="1.6" opacity=".85"/>`);
+      }
+    }
+    for (const [i, n] of counts) {
+      if (n < 2) continue;
+      const [x, y] = pts[i];
+      parts.push(`<polygon points="${hexPoints(x, y, size * .72)}" fill="#ffffff" opacity=".13"/>`);
+    }
+
+    // Directed sightlines. One-way contact - a scout watching an army while
+    // itself unseen - is the fact no single-civ view can show, so it is drawn
+    // rather than left to be inferred.
+    for (const [observer, seen] of Object.entries(f.contact || {})) {
+      if (!seen.length) continue;
+      const mine = f.units.filter((u) => u.owner === observer).map((u) => u.at);
+      const lit = new Set(f.visibility[observer] || []);
+      for (const other of seen) {
+        const targets = [...f.units, ...f.cities].filter((a) => a.owner === other && lit.has(a.at));
+        for (const t of targets.slice(0, 2)) {
+          const from = nearest(mine, t.at);
+          if (from === null) continue;
+          const [x1, y1] = pts[from], [x2, y2] = pts[t.at];
+          parts.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${colourOf(observer)}" stroke-width="1.3" opacity=".7" stroke-dasharray="3 2"/>`);
+        }
+      }
+    }
+  }
+
+  // Cities are drawn, not stamped: the settlement grows with population and
+  // gains a wall when one is built, so the board shows what a civ chose to
+  // build rather than just where it is.
+  for (const c of f.cities) {
+    if (lit && !lit.has(c.at)) continue;
+    const [x, y] = pts[c.at];
+    const tint = colourOf(c.owner);
+    const walled = c.buildings.includes("walls");
+    const houses = Math.min(5, 1 + Math.floor(c.population / 2));
+
+    if (walled) {
+      parts.push(`<circle cx="${x}" cy="${y}" r="${size * .78}" fill="none" stroke="#cfc6ae" stroke-width="1.6"/>`);
+      for (let k = 0; k < 6; k++) {
+        const a = (Math.PI / 3) * k;
+        parts.push(`<rect x="${x + Math.cos(a) * size * .78 - 1}" y="${y + Math.sin(a) * size * .78 - 1}" width="2" height="2" fill="#cfc6ae"/>`);
+      }
+    }
+    for (let k = 0; k < houses; k++) {
+      const a = (Math.PI * 2 * k) / houses - Math.PI / 2;
+      const rr = houses === 1 ? 0 : size * .3;
+      const hx2 = x + Math.cos(a) * rr, hy2 = y + Math.sin(a) * rr;
+      const w = size * .3;
+      parts.push(`<rect x="${hx2 - w / 2}" y="${hy2 - w * .3}" width="${w}" height="${w * .8}" fill="#d8c9a8" stroke="#6b5a3c" stroke-width=".3"/>`);
+      parts.push(`<path d="M${hx2 - w * .62} ${hy2 - w * .28} L${hx2} ${hy2 - w * .95} L${hx2 + w * .62} ${hy2 - w * .28} Z" fill="${tint}"/>`);
+    }
+    if (c.buildings.includes("temple") || c.buildings.includes("great_library")) {
+      parts.push(`<rect x="${x - 1}" y="${y - size * .62}" width="2" height="${size * .42}" fill="#e8dcc0" stroke="#6b5a3c" stroke-width=".25"/>`);
+    }
+    parts.push(`<circle cx="${x + size * .58}" cy="${y + size * .58}" r="${size * .3}" fill="${tint}" stroke="#0b0e13" stroke-width=".4"/>`);
+    parts.push(`<text x="${x + size * .58}" y="${y + size * .58 + 2.4}" font-size="6" text-anchor="middle" fill="#08101a" font-weight="700">${c.population}</text>`);
+  }
+
+  for (const u of f.units) {
+    if (lit && !lit.has(u.at)) continue;
+    const [x, y] = pts[u.at];
+    const wild = !civOf(u.owner);
+    // A flat base under the figure's feet, not a disc behind it. The disc
+    // version won: ownership was legible but the silhouette read as a blob on
+    // a coloured circle. An ellipse at ground level does the same job and
+    // leaves the figure standing clear of it.
+    parts.push(`<ellipse cx="${x}" cy="${y + size * .52}" rx="${size * .42}" ry="${size * .16}" fill="${colourOf(u.owner)}" opacity="${wild ? .55 : .95}"/>`);
+    parts.push(`<ellipse cx="${x}" cy="${y + size * .52}" rx="${size * .42}" ry="${size * .16}" fill="none" stroke="#0b0e13" stroke-width=".35"/>`);
+    parts.push(g(`u-${u.type}`, x, y - size * .06, size * 1.5, 'style="filter:drop-shadow(0 0 .8px #0b0e13)"'));
+    if (u.embarked) {
+      parts.push(`<path d="M${x - size * .5} ${y + size * .5} q${size * .5} ${size * .3} ${size} 0" stroke="#8fd8f0" stroke-width="1" fill="none"/>`);
+    }
+    if (u.fortified) {
+      parts.push(`<path d="M${x - size * .5} ${y + size * .62} h${size} " stroke="#e8dcc0" stroke-width="1.1" opacity=".8"/>`);
+    }
+    if (u.hp < 100) {
+      const w = size * .8;
+      parts.push(`<rect x="${x - w / 2}" y="${y - size * .78}" width="${w}" height="1.6" fill="#2b0f0f"/>`);
+      parts.push(`<rect x="${x - w / 2}" y="${y - size * .78}" width="${(w * u.hp) / 100}" height="1.6" fill="${u.hp > 50 ? "#5ad46a" : "#e05a4a"}"/>`);
+    }
+  }
+
+  svg.innerHTML = parts.join("");
+}
+
+function economyPanel() {
+  const e = state.frame.economy;
+  const rows = state.match.civs.map((c) => {
+    const d = e[c.player_id] || {};
+    // A zero delta is omitted entirely. Rendering it produced "7 0", which
+    // reads as seventy - the one number on this panel you must not misread.
+    const sign = (n) =>
+      n ? `<span class="${n < 0 ? "neg" : "pos"}">${n > 0 ? "+" : ""}${n}</span>` : "";
+    return `<tr class="${d.alive ? "" : "dead"}">
+      <td class="name" title="${c.civ_name}"><span class="civ"><span class="dot" style="background:${COLOURS[c.colour]}"></span>${c.civ_name}</span></td>
+      <td>${d.gold ?? 0} ${sign(d.gold_per_turn ?? 0)}</td>
+      <td>${d.food_stored ?? 0} ${sign(d.food_surplus ?? 0)}</td>
+      <td>${d.production_per_turn ?? 0}</td>
+      <td>${d.science_per_turn ?? 0}</td>
+      <td>${d.cities ?? 0}/${d.units ?? 0}</td>
+      <td>${d.score ?? 0}</td></tr>`;
+  });
+  $("economy").innerHTML = `<table>
+    <thead><tr><th>civ</th><th>gold</th><th>food</th><th>prod</th><th>sci</th><th>c/u</th><th>score</th></tr></thead>
+    <tbody>${rows.join("")}</tbody></table>`;
+}
+
+function contactPanel() {
+  const civs = state.match.civs, c = state.frame.contact || {};
+  const head = civs.map((x) => `<th style="color:${COLOURS[x.colour]}">${x.player_id}</th>`).join("");
+  const rows = civs.map((a) => {
+    const cells = civs.map((b) => {
+      if (a.player_id === b.player_id) return `<td class="self"></td>`;
+      const sees = (c[a.player_id] || []).includes(b.player_id);
+      return `<td style="background:${sees ? COLOURS[a.colour] : "transparent"}"></td>`;
+    }).join("");
+    return `<tr><th style="color:${COLOURS[a.colour]}">${a.player_id}</th>${cells}</tr>`;
+  });
+  $("contact").innerHTML = `<table class="matrix"><tr><th></th>${head}</tr>${rows.join("")}</table>`;
+}
+
+function reasoningPanel() {
+  const r = state.frame.reasoning || {};
+  const cards = state.match.civs.filter((c) => r[c.player_id]).map((c) => {
+    const d = r[c.player_id];
+    return `<div class="card">
+      <div class="who"><span class="dot" style="background:${COLOURS[c.colour]}"></span>${c.civ_name}</div>
+      ${d.assessment ? `<p>${esc(d.assessment)}</p>` : ""}
+      <p class="plan">${esc(d.plan || "—")}</p>
+      ${d.threats?.length ? `<p>⚠ ${d.threats.map(esc).join(" · ")}</p>` : ""}
+    </div>`;
+  });
+  $("reasoning").innerHTML = cards.join("") || `<div class="empty">No reasoning recorded this turn.</div>`;
+}
+
+function messagesPanel() {
+  const msgs = state.frame.messages || [];
+  const rel = Object.entries(state.frame.relations || {})
+    .filter(([, v]) => v.state !== "neutral")
+    .map(([k, v]) => `<div class="tick">${k.replace("|", " · ")} <b>${v.state}</b> since turn ${v.since}</div>`);
+  const items = msgs.map((m) => `<div class="msg ${m.channel}">
+      <div class="meta">${nameOf(m.from)}${m.to ? ` → ${nameOf(m.to)}` : " · public"}</div>
+      ${esc(m.text)}</div>`);
+  $("messages").innerHTML =
+    (items.join("") || `<div class="empty">Nothing said this turn.</div>`) +
+    (rel.length ? `<div style="margin-top:8px">${rel.join("")}</div>` : "");
+}
+
+function eventsPanel() {
+  const items = (state.frame.events || []).map(
+    (e) => `<div class="tick">${e.actor ? `<b style="color:${colourOf(e.actor)}">${e.actor}</b> ` : ""}${esc(e.text)}</div>`
+  );
+  $("events").innerHTML = items.join("") || `<div class="empty">Quiet turn.</div>`;
+}
+
+const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+
+async function show(turn) {
+  state.turn = Math.max(1, Math.min(turn, state.match.turns));
+  state.frame = await loadFrame(state.turn);
+  $("slider").value = state.turn;
+  $("turnLabel").textContent = `turn ${state.turn} / ${state.match.turns}`;
+  // Withheld until the replay reaches it. A visitor scrubbing a published match
+  // should not be told who wins in the header on turn 1.
+  const v = state.outcome;
+  $("status").textContent =
+    v && state.turn >= state.match.turns
+      ? `${nameOf(v.winner)} won by ${v.condition} on turn ${v.turn}`
+      : "";
+  await draw();
+  economyPanel(); contactPanel(); reasoningPanel(); messagesPanel(); eventsPanel();
+  // Prefetch neighbours so scrubbing stays smooth without loading the match.
+  for (const t of [state.turn + 1, state.turn + 2]) if (t <= state.match.turns) loadFrame(t).catch(() => {});
+}
+
+function buildModes() {
+  const opts = [["god", "God"], ["contact", "Contact"],
+    ...state.match.civs.map((c) => [`agent:${c.player_id}`, c.civ_name.split(" ")[0]])];
+  $("modes").innerHTML = opts.map(([k, label]) =>
+    `<button data-mode="${k}" aria-pressed="${k === "god"}">${label}</button>`).join("");
+  $("modes").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const [mode, who] = b.dataset.mode.split(":");
+    state.mode = mode === "agent" ? "agent" : mode;
+    state.focus = who || null;
+    for (const x of $("modes").children) x.setAttribute("aria-pressed", x === b);
+    draw();
+  };
+}
+
+function togglePlay() {
+  if (state.playing) { clearInterval(state.playing); state.playing = null; $("play").textContent = "▶ Play"; return; }
+  $("play").textContent = "❚❚ Pause";
+  state.playing = setInterval(async () => {
+    if (state.turn >= state.match.turns) return togglePlay();
+    await show(state.turn + 1);
+  }, 550);
+}
+
+(async function init() {
+  state.match = await (await fetch(`${BASE}/match.json`)).json();
+  LAYOUT = layout();
+  NEIGHBOURS = buildNeighbours();
+  state.outcome = state.match.victory;
+  $("slider").max = state.match.turns;
+  buildModes();
+  $("slider").oninput = (e) => show(+e.target.value);
+  $("prev").onclick = () => show(state.turn - 1);
+  $("next").onclick = () => show(state.turn + 1);
+  $("play").onclick = togglePlay;
+  addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") show(state.turn - 1);
+    if (e.key === "ArrowRight") show(state.turn + 1);
+    if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  });
+  await show(1);
+})();
+</script>

@@ -1,0 +1,422 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ARENA-4X world</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  The 3D replay viewer.
+
+  Same contract as the flat one: a pure function of the bundle, with no API
+  client, no keys and no writes. What it adds is a camera you can orbit, which
+  turns the one real objection to 3D - a mountain range hiding the army behind
+  it - into the reason to move.
+
+  three.js is vendored rather than pulled from a CDN so the page works offline
+  and carries no third-party origin.
+-->
+<style>
+  :root {
+    --bg:#0b0f14; --panel:#12171f; --line:#222a35; --ink:#e6edf3; --dim:#8b949e; --faint:#4d5560;
+    --c0:#4ade80; --c1:#fbbf24; --c2:#38bdf8; --c3:#f472b6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
+    display:grid;grid-template-columns:minmax(0,1fr) 360px;height:100vh;overflow:hidden}
+  main{position:relative;display:flex;flex-direction:column;min-width:0}
+  aside{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto}
+  #stage{flex:1;min-height:0;position:relative}
+  canvas{display:block;width:100%;height:100%}
+
+  header{position:absolute;top:0;left:0;right:0;z-index:2;display:flex;gap:10px;align-items:center;
+    padding:10px 14px;background:linear-gradient(#0b0f14ee,#0b0f1400);flex-wrap:wrap}
+  h1{font-size:13px;margin:0;font-weight:600;letter-spacing:.04em}
+  button{background:#1b222c;color:var(--ink);border:1px solid var(--line);padding:5px 10px;
+    border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
+  button:hover{background:#28313d}
+  button[aria-pressed="true"]{background:#2f6feb;border-color:#2f6feb}
+  .scrub{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--line);
+    background:var(--panel)}
+  input[type=range]{flex:1;accent-color:#2f6feb}
+  .turn{font-variant-numeric:tabular-nums;min-width:96px;color:var(--dim)}
+  .hint{position:absolute;bottom:8px;left:14px;color:var(--faint);font-size:11px;z-index:2}
+
+  section{border-bottom:1px solid var(--line);padding:12px 14px}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 8px;font-weight:600}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
+  th,td{text-align:right;padding:3px 4px}
+  th:first-child,td:first-child{text-align:left}
+  td.name{width:42%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  thead th{color:var(--dim);font-weight:500;font-size:11px;border-bottom:1px solid var(--line)}
+  .civ{display:flex;align-items:center;gap:6px}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .dead{opacity:.4;text-decoration:line-through}
+  .neg{color:#f87171}.pos{color:#4ade80}
+  .card{background:#0f141b;border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:8px}
+  .card .who{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:4px}
+  .card p{margin:2px 0;color:var(--dim)}.card p.plan{color:var(--ink)}
+  .tick{color:var(--dim);padding:1px 0}.tick b{color:var(--ink);font-weight:500}
+  .empty{color:var(--faint);font-style:italic}
+  .msg{border-left:2px solid var(--line);padding:4px 0 4px 8px;margin-bottom:6px}
+  .msg.private{border-left-color:#f472b6}
+  .msg .meta{color:var(--faint);font-size:11px}
+</style>
+
+<main>
+  <div id="stage">
+    <header>
+      <h1>ARENA-4X</h1>
+      <div id="modes" style="display:flex;gap:2px"></div>
+      <button id="play">▶ Play</button>
+      <button id="top">Top-down</button>
+      <span class="turn" id="status"></span>
+    </header>
+    <div class="hint">drag to orbit · scroll to zoom · right-drag to pan</div>
+  </div>
+  <div class="scrub">
+    <button id="prev">‹</button>
+    <input type="range" id="slider" min="1" value="1">
+    <button id="next">›</button>
+    <span class="turn" id="turnLabel"></span>
+  </div>
+</main>
+
+<aside>
+  <section><h2>Empires</h2><div id="economy"></div></section>
+  <section><h2>Reasoning</h2><div id="reasoning"></div></section>
+  <section><h2>Diplomacy</h2><div id="messages"></div></section>
+  <section><h2>Events</h2><div id="events"></div></section>
+</aside>
+
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.min.js","three/":"./vendor/"}}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/OrbitControls.js";
+import {
+  HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
+  buildTerrain, buildScatter, unitGeometry, baseGeometry,
+  houseGeometry, towerGeometry, wallGeometry, cityLayout,
+} from "./world.js";
+
+const BASE = new URLSearchParams(location.search).get("match") || ".";
+const CSS = ["var(--c0)", "var(--c1)", "var(--c2)", "var(--c3)"];
+const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
+                    "swordsman","horseman","catapult","trireme","wolf","barbarian"];
+
+const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null, index:null };
+const cache = new Map();
+const $ = (id) => document.getElementById(id);
+const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
+const cssOf = (id) => (civOf(id) ? CSS[civOf(id).colour % 4] : "#9aa0aa");
+const hexOf = (id) => (civOf(id) ? CIV_COLOURS[civOf(id).colour % 4] : WILD_COLOUR);
+const nameOf = (id) => (civOf(id) ? civOf(id).civ_name : "Wilderness");
+const esc = (s) => String(s).replace(/[<>&]/g,(c)=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+
+// --- scene -----------------------------------------------------------------
+const stage = $("stage");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;  // PCFSoft is deprecated in r185
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f14);
+scene.fog = new THREE.Fog(0x0b0f14, 46, 96);
+
+const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 300);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+// Clamped below the horizon: dropping under the terrain would show the world
+// from beneath and read as a bug rather than a viewpoint.
+controls.maxPolarAngle = Math.PI * 0.47;
+controls.minDistance = 6;
+controls.maxDistance = 220;
+
+scene.add(new THREE.HemisphereLight(0xbcd7ff, 0x2b2418, 1.5));
+const sun = new THREE.DirectionalLight(0xfff2d8, 2.1);
+sun.position.set(24, 34, 14);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left:-40, right:40, top:40, bottom:-40, near:1, far:120 });
+scene.add(sun);
+
+const staticLayer = new THREE.Group();   // terrain, scatter - built once
+const dynamicLayer = new THREE.Group();  // units, cities, borders - per turn
+scene.add(staticLayer, dynamicLayer);
+
+function resize() {
+  const { clientWidth: w, clientHeight: h } = stage;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(h, 1);
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+
+(function loop() {
+  requestAnimationFrame(loop);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+// --- data ------------------------------------------------------------------
+async function loadFrame(turn) {
+  if (cache.has(turn)) return cache.get(turn);
+  const res = await fetch(`${BASE}/turns/${String(turn).padStart(4,"0")}.json`);
+  const frame = await res.json();
+  cache.set(turn, frame);
+  return frame;
+}
+
+async function ownersAt(turn) {
+  const owners = new Array(S.match.terrain.length).fill(null);
+  for (let t = 1; t <= turn; t++) {
+    const f = await loadFrame(t);
+    for (const [i, who] of Object.entries(f.owners || {})) owners[+i] = who;
+  }
+  return owners;
+}
+
+// --- rendering -------------------------------------------------------------
+const clear = (group) => {
+  while (group.children.length) {
+    const child = group.children.pop();
+    child.geometry?.dispose?.();
+    child.material?.dispose?.();
+  }
+};
+
+const M = new THREE.Matrix4();
+const C = new THREE.Color();
+
+function topOf(index) {
+  return HEIGHT[S.match.terrain[index]] ?? 0.36;
+}
+
+function instanced(geo, count, opts = {}) {
+  const mesh = new THREE.InstancedMesh(
+    geo,
+    new THREE.MeshLambertMaterial({ flatShading: true, ...opts }),
+    count
+  );
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+async function drawTurn() {
+  const f = S.frame;
+  clear(dynamicLayer);
+
+  const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
+  const owners = await ownersAt(S.turn);
+  const at = (i) => {
+    const [q, r] = S.match.tiles[i].split(",").map(Number);
+    return axialToWorld(q, r);
+  };
+
+  // Territory: a thin coloured slab laid on the ground, which reads as a claim
+  // from any angle without hiding the terrain under it.
+  const claimed = owners.map((o, i) => (o && (!lit || lit.has(i)) ? i : -1)).filter((i) => i >= 0);
+  if (claimed.length) {
+    // Same orientation rule as the terrain: pointy-top, full radius, no
+    // rotation. Slightly inset so a border reads as a claim painted on the
+    // tile rather than a second tile stacked on top of it.
+    const geo = new THREE.CylinderGeometry(0.92, 0.92, 0.05, 6);
+    const mesh = instanced(geo, claimed.length, { transparent: true, opacity: 0.34 });
+    claimed.forEach((i, n) => {
+      const [x, , z] = at(i);
+      M.makeScale(1, 1, 1).setPosition(x, topOf(i) + 0.02, z);
+      mesh.setMatrixAt(n, M);
+      mesh.setColorAt(n, C.setHex(hexOf(owners[i])));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.castShadow = false;
+    dynamicLayer.add(mesh);
+  }
+
+  // Cities: houses, a tower for a temple or library, a wall ring if built.
+  const cities = f.cities.filter((c) => !lit || lit.has(c.at));
+  if (cities.length) {
+    const layouts = cities.map((c, n) => cityLayout(c.population, n + c.at));
+    const houses = instanced(houseGeometry(), layouts.reduce((a, l) => a + l.length, 0));
+    let hn = 0;
+    cities.forEach((c, ci) => {
+      const [x, , z] = at(c.at);
+      const top = topOf(c.at);
+      for (const [dx, dy, dz] of layouts[ci]) {
+        M.makeRotationY(((c.at + hn) % 6) * 0.5).setPosition(x + dx, top + dy, z + dz);
+        houses.setMatrixAt(hn, M);
+        houses.setColorAt(hn, C.setHex(hexOf(c.owner)).lerp(new THREE.Color(0xf0e6cf), 0.55));
+        hn++;
+      }
+    });
+    houses.instanceMatrix.needsUpdate = true;
+    dynamicLayer.add(houses);
+
+    const spired = cities.filter((c) =>
+      c.buildings.some((b) => ["temple","great_library","pyramids","apex_project"].includes(b)));
+    if (spired.length) {
+      const towers = instanced(towerGeometry(), spired.length, { color: 0xece2cb });
+      spired.forEach((c, n) => {
+        const [x, , z] = at(c.at);
+        M.makeScale(1, 1, 1).setPosition(x, topOf(c.at), z);
+        towers.setMatrixAt(n, M);
+      });
+      towers.instanceMatrix.needsUpdate = true;
+      dynamicLayer.add(towers);
+    }
+
+    const walled = cities.filter((c) => c.buildings.includes("walls"));
+    if (walled.length) {
+      const walls = instanced(wallGeometry(), walled.length,
+        { color: 0xcfc6ae, side: THREE.DoubleSide });
+      walled.forEach((c, n) => {
+        const [x, , z] = at(c.at);
+        M.makeScale(1, 1, 1).setPosition(x, topOf(c.at) + 0.12, z);
+        walls.setMatrixAt(n, M);
+      });
+      walls.instanceMatrix.needsUpdate = true;
+      dynamicLayer.add(walls);
+    }
+  }
+
+  // Units, one instanced mesh per type plus a shared ownership ring.
+  const visible = f.units.filter((u) => !lit || lit.has(u.at));
+  const bases = instanced(baseGeometry(), visible.length, { transparent: true, opacity: 0.9 });
+  visible.forEach((u, n) => {
+    const [x, , z] = at(u.at);
+    M.makeScale(1, 1, 1).setPosition(x, topOf(u.at) + 0.02, z);
+    bases.setMatrixAt(n, M);
+    bases.setColorAt(n, C.setHex(hexOf(u.owner)));
+  });
+  bases.instanceMatrix.needsUpdate = true;
+  bases.castShadow = false;
+  dynamicLayer.add(bases);
+
+  for (const type of UNIT_TYPES) {
+    const of = visible.filter((u) => u.type === type);
+    if (!of.length) continue;
+    const mesh = instanced(unitGeometry(type), of.length);
+    of.forEach((u, n) => {
+      const [x, , z] = at(u.at);
+      // Face the board centre, so armies read as oriented rather than scattered.
+      M.makeRotationY(Math.atan2(-x, -z)).setPosition(x, topOf(u.at) + (u.embarked ? -0.06 : 0.02), z);
+      mesh.setMatrixAt(n, M);
+      const base = new THREE.Color(hexOf(u.owner));
+      // Wounded units darken, so a battered stack is visible without a UI probe.
+      mesh.setColorAt(n, base.lerp(new THREE.Color(0x2a1216), (100 - u.hp) / 220));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    dynamicLayer.add(mesh);
+  }
+}
+
+// --- panels ----------------------------------------------------------------
+function panels() {
+  const f = S.frame, e = f.economy;
+  const sign = (n) => (n ? `<span class="${n<0?"neg":"pos"}">${n>0?"+":""}${n}</span>` : "");
+  $("economy").innerHTML = `<table><thead><tr><th>civ</th><th>gold</th><th>food</th>
+    <th>prod</th><th>sci</th><th>c/u</th><th>score</th></tr></thead><tbody>${
+    S.match.civs.map((c) => {
+      const d = e[c.player_id] || {};
+      return `<tr class="${d.alive?"":"dead"}"><td class="name" title="${c.civ_name}">
+        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}</span></td>
+        <td>${d.gold??0} ${sign(d.gold_per_turn??0)}</td><td>${d.food_stored??0} ${sign(d.food_surplus??0)}</td>
+        <td>${d.production_per_turn??0}</td><td>${d.science_per_turn??0}</td>
+        <td>${d.cities??0}/${d.units??0}</td><td>${d.score??0}</td></tr>`;
+    }).join("")}</tbody></table>`;
+
+  $("reasoning").innerHTML = S.match.civs.filter((c) => f.reasoning?.[c.player_id]).map((c) => {
+    const d = f.reasoning[c.player_id];
+    return `<div class="card"><div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}</div>
+      <p class="plan">${esc(d.plan||"—")}</p></div>`;
+  }).join("") || `<div class="empty">No reasoning this turn.</div>`;
+
+  const rel = Object.entries(f.relations||{}).filter(([,v])=>v.state!=="neutral")
+    .map(([k,v])=>`<div class="tick">${k.replace("|"," · ")} <b>${v.state}</b> since turn ${v.since}</div>`);
+  $("messages").innerHTML = ((f.messages||[]).map((m)=>`<div class="msg ${m.channel}">
+      <div class="meta">${nameOf(m.from)}${m.to?` → ${nameOf(m.to)}`:" · public"}</div>${esc(m.text)}</div>`).join("")
+      || `<div class="empty">Nothing said this turn.</div>`) +
+    (rel.length?`<div style="margin-top:8px">${rel.join("")}</div>`:"");
+
+  $("events").innerHTML = (f.events||[]).map((ev)=>`<div class="tick">${
+    ev.actor?`<b style="color:${cssOf(ev.actor)}">${ev.actor}</b> `:""}${esc(ev.text)}</div>`).join("")
+    || `<div class="empty">Quiet turn.</div>`;
+}
+
+async function show(turn) {
+  S.turn = Math.max(1, Math.min(turn, S.match.turns));
+  S.frame = await loadFrame(S.turn);
+  $("slider").value = S.turn;
+  $("turnLabel").textContent = `turn ${S.turn} / ${S.match.turns}`;
+  const v = S.match.victory;
+  $("status").textContent = v && S.turn >= S.match.turns
+    ? `${nameOf(v.winner)} won by ${v.condition}` : "";
+  await drawTurn();
+  panels();
+  for (const t of [S.turn+1, S.turn+2]) if (t <= S.match.turns) loadFrame(t).catch(()=>{});
+}
+
+function togglePlay() {
+  if (S.playing) { clearInterval(S.playing); S.playing = null; $("play").textContent = "▶ Play"; return; }
+  $("play").textContent = "❚❚ Pause";
+  S.playing = setInterval(async () => {
+    if (S.turn >= S.match.turns) return togglePlay();
+    await show(S.turn + 1);
+  }, 700);
+}
+
+(async function init() {
+  S.match = await (await fetch(`${BASE}/match.json`)).json();
+
+  staticLayer.add(buildTerrain(S.match.tiles, S.match.terrain));
+  staticLayer.add(buildScatter(S.match.tiles, S.match.terrain));
+
+  // Frame the board from its actual bounds. A hardcoded camera distance cropped
+  // the map off every edge, and would have broken again on any other radius.
+  const pts = S.match.tiles.map((k) => axialToWorld(...k.split(",").map(Number)));
+  const x0 = Math.min(...pts.map((p)=>p[0])), x1 = Math.max(...pts.map((p)=>p[0]));
+  const z0 = Math.min(...pts.map((p)=>p[2])), z1 = Math.max(...pts.map((p)=>p[2]));
+  const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  const extent = Math.max(x1 - x0, z1 - z0);
+  resize();
+  // Fit the wider of the two axes, allowing for the viewport being wider than
+  // it is tall, then back off a little so the board is not flush to the frame.
+  const vFov = (camera.fov * Math.PI) / 180;
+  const fit = extent / (2 * Math.tan(vFov / 2) * Math.min(1, camera.aspect)) * 1.15;
+  S.home = { target: new THREE.Vector3(cx, 0, cz), dist: fit };
+  controls.target.copy(S.home.target);
+  camera.position.set(cx, fit * 0.72, cz + fit * 0.66);
+  scene.fog.near = fit * 0.9;
+  scene.fog.far = fit * 2.4;
+
+  $("modes").innerHTML = [["god","God"], ...S.match.civs.map((c)=>[`agent:${c.player_id}`, c.civ_name.split(" ")[0]])]
+    .map(([k,label]) => `<button data-mode="${k}" aria-pressed="${k==="god"}">${label}</button>`).join("");
+  $("modes").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const [mode, who] = b.dataset.mode.split(":");
+    S.mode = mode; S.focus = who || null;
+    for (const x of $("modes").children) x.setAttribute("aria-pressed", x === b);
+    drawTurn();
+  };
+  $("top").onclick = () => {
+    controls.target.copy(S.home.target);
+    camera.position.set(S.home.target.x, S.home.dist * 1.05, S.home.target.z + 0.01);
+    controls.update();
+  };
+  $("slider").max = S.match.turns;
+  $("slider").oninput = (e) => show(+e.target.value);
+  $("prev").onclick = () => show(S.turn - 1);
+  $("next").onclick = () => show(S.turn + 1);
+  $("play").onclick = togglePlay;
+  addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") show(S.turn - 1);
+    if (e.key === "ArrowRight") show(S.turn + 1);
+    if (e.key === " ") { e.preventDefault(); togglePlay(); }
+  });
+  await show(1);
+})();
+</script>

@@ -25,3 +25,6 @@ node_modules/
 
 # OS
 .DS_Store
+
+# Exported replay bundles are build artifacts, not source.
+/output/
