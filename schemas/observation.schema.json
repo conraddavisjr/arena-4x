@@ -1,0 +1,870 @@
+{
+  "$defs": {
+    "BudgetView": {
+      "additionalProperties": false,
+      "properties": {
+        "match_pct_elapsed": {
+          "title": "Match Pct Elapsed",
+          "type": "number"
+        },
+        "tokens_allowance": {
+          "title": "Tokens Allowance",
+          "type": "integer"
+        },
+        "tokens_remaining": {
+          "title": "Tokens Remaining",
+          "type": "integer"
+        },
+        "tokens_spent": {
+          "title": "Tokens Spent",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "match_pct_elapsed",
+        "tokens_allowance",
+        "tokens_remaining",
+        "tokens_spent"
+      ],
+      "title": "BudgetView",
+      "type": "object"
+    },
+    "CityView": {
+      "additionalProperties": false,
+      "properties": {
+        "building": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Building"
+        },
+        "buildings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Buildings",
+          "type": "array"
+        },
+        "coastal": {
+          "title": "Coastal",
+          "type": "boolean"
+        },
+        "defense": {
+          "title": "Defense",
+          "type": "integer"
+        },
+        "food_stored": {
+          "title": "Food Stored",
+          "type": "integer"
+        },
+        "food_surplus": {
+          "title": "Food Surplus",
+          "type": "integer"
+        },
+        "food_to_grow": {
+          "title": "Food To Grow",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "population": {
+          "title": "Population",
+          "type": "integer"
+        },
+        "pos": {
+          "title": "Pos",
+          "type": "string"
+        },
+        "production_per_turn": {
+          "title": "Production Per Turn",
+          "type": "integer"
+        },
+        "turns_remaining": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Turns Remaining"
+        }
+      },
+      "required": [
+        "building",
+        "buildings",
+        "coastal",
+        "defense",
+        "food_stored",
+        "food_surplus",
+        "food_to_grow",
+        "id",
+        "name",
+        "population",
+        "pos",
+        "production_per_turn",
+        "turns_remaining"
+      ],
+      "title": "CityView",
+      "type": "object"
+    },
+    "DiplomacyView": {
+      "additionalProperties": false,
+      "properties": {
+        "inbox": {
+          "items": {
+            "$ref": "#/$defs/MessageView"
+          },
+          "title": "Inbox",
+          "type": "array"
+        },
+        "open_proposals": {
+          "items": {
+            "$ref": "#/$defs/ProposalView"
+          },
+          "title": "Open Proposals",
+          "type": "array"
+        },
+        "public_log": {
+          "items": {
+            "$ref": "#/$defs/MessageView"
+          },
+          "title": "Public Log",
+          "type": "array"
+        },
+        "relations": {
+          "items": {
+            "$ref": "#/$defs/RelationView"
+          },
+          "title": "Relations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "inbox",
+        "open_proposals",
+        "public_log",
+        "relations"
+      ],
+      "title": "DiplomacyView",
+      "type": "object"
+    },
+    "Dossier": {
+      "additionalProperties": false,
+      "description": "The agent's self-authored memory.\n\nThe engine stores this and hands it back verbatim next turn. It never edits\nthe content; the only thing it may do is truncate an oversized one, and it\nemits `dossier_truncated` when it does so the loss is visible in the log\nrather than silent.",
+      "properties": {
+        "doctrine": {
+          "title": "Doctrine",
+          "type": "string"
+        },
+        "lessons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Lessons",
+          "type": "array"
+        },
+        "opponent_models": {
+          "items": {
+            "$ref": "#/$defs/OpponentModel"
+          },
+          "title": "Opponent Models",
+          "type": "array"
+        },
+        "standing_commitments": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Standing Commitments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "doctrine",
+        "lessons",
+        "opponent_models",
+        "standing_commitments"
+      ],
+      "title": "Dossier",
+      "type": "object"
+    },
+    "Improvement": {
+      "enum": [
+        "farm",
+        "mine",
+        "road",
+        "fishing_boats"
+      ],
+      "title": "Improvement",
+      "type": "string"
+    },
+    "IntelView": {
+      "additionalProperties": false,
+      "properties": {
+        "civ_name": {
+          "title": "Civ Name",
+          "type": "string"
+        },
+        "in_contact": {
+          "title": "In Contact",
+          "type": "boolean"
+        },
+        "known_cities": {
+          "title": "Known Cities",
+          "type": "integer"
+        },
+        "known_score": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Known Score"
+        },
+        "military_estimate": {
+          "title": "Military Estimate",
+          "type": "string"
+        },
+        "player_id": {
+          "title": "Player Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "civ_name",
+        "in_contact",
+        "known_cities",
+        "known_score",
+        "military_estimate",
+        "player_id"
+      ],
+      "title": "IntelView",
+      "type": "object"
+    },
+    "MapView": {
+      "additionalProperties": false,
+      "properties": {
+        "explored_tiles": {
+          "title": "Explored Tiles",
+          "type": "integer"
+        },
+        "frontier": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Frontier",
+          "type": "array"
+        },
+        "remembered": {
+          "items": {
+            "$ref": "#/$defs/RememberedView"
+          },
+          "title": "Remembered",
+          "type": "array"
+        },
+        "visible": {
+          "items": {
+            "$ref": "#/$defs/TileView"
+          },
+          "title": "Visible",
+          "type": "array"
+        }
+      },
+      "required": [
+        "explored_tiles",
+        "frontier",
+        "remembered",
+        "visible"
+      ],
+      "title": "MapView",
+      "type": "object"
+    },
+    "MessageView": {
+      "additionalProperties": false,
+      "properties": {
+        "channel": {
+          "title": "Channel",
+          "type": "string"
+        },
+        "from_player": {
+          "title": "From Player",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "turn": {
+          "title": "Turn",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channel",
+        "from_player",
+        "text",
+        "turn"
+      ],
+      "title": "MessageView",
+      "type": "object"
+    },
+    "OpponentModel": {
+      "additionalProperties": false,
+      "properties": {
+        "assessed_intent": {
+          "title": "Assessed Intent",
+          "type": "string"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Notes"
+        },
+        "player_id": {
+          "title": "Player Id",
+          "type": "string"
+        },
+        "trustworthiness": {
+          "$ref": "#/$defs/Trustworthiness"
+        }
+      },
+      "required": [
+        "assessed_intent",
+        "notes",
+        "player_id",
+        "trustworthiness"
+      ],
+      "title": "OpponentModel",
+      "type": "object"
+    },
+    "ProposalView": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_turn": {
+          "title": "Expires Turn",
+          "type": "integer"
+        },
+        "from_player": {
+          "title": "From Player",
+          "type": "string"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message"
+        },
+        "proposal_id": {
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "terms": {
+          "additionalProperties": false,
+          "title": "Terms",
+          "type": "object"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expires_turn",
+        "from_player",
+        "message",
+        "proposal_id",
+        "terms",
+        "type"
+      ],
+      "title": "ProposalView",
+      "type": "object"
+    },
+    "RelationView": {
+      "additionalProperties": false,
+      "properties": {
+        "civ_name": {
+          "title": "Civ Name",
+          "type": "string"
+        },
+        "pact_until": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pact Until"
+        },
+        "player_id": {
+          "title": "Player Id",
+          "type": "string"
+        },
+        "since_turn": {
+          "title": "Since Turn",
+          "type": "integer"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "civ_name",
+        "pact_until",
+        "player_id",
+        "since_turn",
+        "state"
+      ],
+      "title": "RelationView",
+      "type": "object"
+    },
+    "RememberedView": {
+      "additionalProperties": false,
+      "properties": {
+        "last_seen_turn": {
+          "title": "Last Seen Turn",
+          "type": "integer"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Note"
+        },
+        "pos": {
+          "title": "Pos",
+          "type": "string"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Resource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terrain": {
+          "$ref": "#/$defs/Terrain"
+        }
+      },
+      "required": [
+        "last_seen_turn",
+        "note",
+        "pos",
+        "resource",
+        "terrain"
+      ],
+      "title": "RememberedView",
+      "type": "object"
+    },
+    "ResearchView": {
+      "additionalProperties": false,
+      "properties": {
+        "available_next": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Next",
+          "type": "array"
+        },
+        "current": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Current"
+        },
+        "known_techs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Known Techs",
+          "type": "array"
+        },
+        "science_per_turn": {
+          "title": "Science Per Turn",
+          "type": "integer"
+        },
+        "turns_remaining": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Turns Remaining"
+        }
+      },
+      "required": [
+        "available_next",
+        "current",
+        "known_techs",
+        "science_per_turn",
+        "turns_remaining"
+      ],
+      "title": "ResearchView",
+      "type": "object"
+    },
+    "Resource": {
+      "enum": [
+        "wheat",
+        "iron",
+        "horses",
+        "gold_ore",
+        "deer",
+        "fish"
+      ],
+      "title": "Resource",
+      "type": "string"
+    },
+    "Terrain": {
+      "enum": [
+        "ocean",
+        "coast",
+        "grassland",
+        "plains",
+        "forest",
+        "hills",
+        "desert",
+        "mountains"
+      ],
+      "title": "Terrain",
+      "type": "string"
+    },
+    "TileView": {
+      "additionalProperties": false,
+      "properties": {
+        "improvement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Improvement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "occupant": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Occupant"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Owner"
+        },
+        "pos": {
+          "title": "Pos",
+          "type": "string"
+        },
+        "resource": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Resource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "terrain": {
+          "$ref": "#/$defs/Terrain"
+        }
+      },
+      "required": [
+        "improvement",
+        "occupant",
+        "owner",
+        "pos",
+        "resource",
+        "terrain"
+      ],
+      "title": "TileView",
+      "type": "object"
+    },
+    "Trustworthiness": {
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        "unknown"
+      ],
+      "title": "Trustworthiness",
+      "type": "string"
+    },
+    "UnitView": {
+      "additionalProperties": false,
+      "properties": {
+        "hp": {
+          "title": "Hp",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "moves_left": {
+          "title": "Moves Left",
+          "type": "integer"
+        },
+        "pos": {
+          "title": "Pos",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hp",
+        "id",
+        "moves_left",
+        "pos",
+        "status",
+        "type"
+      ],
+      "title": "UnitView",
+      "type": "object"
+    },
+    "VictoryProgressView": {
+      "additionalProperties": false,
+      "properties": {
+        "apex_tech_known": {
+          "title": "Apex Tech Known",
+          "type": "boolean"
+        },
+        "domination_streak": {
+          "title": "Domination Streak",
+          "type": "integer"
+        },
+        "domination_threshold_pct": {
+          "title": "Domination Threshold Pct",
+          "type": "integer"
+        },
+        "total_cities": {
+          "title": "Total Cities",
+          "type": "integer"
+        },
+        "turn": {
+          "title": "Turn",
+          "type": "integer"
+        },
+        "turn_limit": {
+          "title": "Turn Limit",
+          "type": "integer"
+        },
+        "your_cities": {
+          "title": "Your Cities",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "apex_tech_known",
+        "domination_streak",
+        "domination_threshold_pct",
+        "total_cities",
+        "turn",
+        "turn_limit",
+        "your_cities"
+      ],
+      "title": "VictoryProgressView",
+      "type": "object"
+    },
+    "YouView": {
+      "additionalProperties": false,
+      "properties": {
+        "civ_name": {
+          "title": "Civ Name",
+          "type": "string"
+        },
+        "culture": {
+          "title": "Culture",
+          "type": "integer"
+        },
+        "gold": {
+          "title": "Gold",
+          "type": "integer"
+        },
+        "gold_per_turn": {
+          "title": "Gold Per Turn",
+          "type": "integer"
+        },
+        "player_id": {
+          "title": "Player Id",
+          "type": "string"
+        },
+        "rates": {
+          "additionalProperties": false,
+          "title": "Rates",
+          "type": "object"
+        },
+        "research": {
+          "$ref": "#/$defs/ResearchView"
+        },
+        "score": {
+          "title": "Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "civ_name",
+        "culture",
+        "gold",
+        "gold_per_turn",
+        "player_id",
+        "rates",
+        "research",
+        "score"
+      ],
+      "title": "YouView",
+      "type": "object"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "budget": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BudgetView"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cities": {
+      "items": {
+        "$ref": "#/$defs/CityView"
+      },
+      "title": "Cities",
+      "type": "array"
+    },
+    "diplomacy": {
+      "$ref": "#/$defs/DiplomacyView"
+    },
+    "intel": {
+      "items": {
+        "$ref": "#/$defs/IntelView"
+      },
+      "title": "Intel",
+      "type": "array"
+    },
+    "legal_actions": {
+      "additionalProperties": false,
+      "title": "Legal Actions",
+      "type": "object"
+    },
+    "map": {
+      "$ref": "#/$defs/MapView"
+    },
+    "match_id": {
+      "title": "Match Id",
+      "type": "string"
+    },
+    "recent_events": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Recent Events",
+      "type": "array"
+    },
+    "turn": {
+      "title": "Turn",
+      "type": "integer"
+    },
+    "units": {
+      "items": {
+        "$ref": "#/$defs/UnitView"
+      },
+      "title": "Units",
+      "type": "array"
+    },
+    "victory_progress": {
+      "$ref": "#/$defs/VictoryProgressView"
+    },
+    "you": {
+      "$ref": "#/$defs/YouView"
+    },
+    "your_dossier": {
+      "$ref": "#/$defs/Dossier"
+    }
+  },
+  "required": [
+    "budget",
+    "cities",
+    "diplomacy",
+    "intel",
+    "legal_actions",
+    "map",
+    "match_id",
+    "recent_events",
+    "turn",
+    "units",
+    "victory_progress",
+    "you",
+    "your_dossier"
+  ],
+  "title": "ARENA-4X observation",
+  "type": "object"
+}

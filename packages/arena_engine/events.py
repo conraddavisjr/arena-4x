@@ -43,6 +43,7 @@ UNIT_MOVED = "unit_moved"
 UNIT_FORTIFIED = "unit_fortified"
 UNIT_KILLED = "unit_killed"
 UNIT_SPAWNED = "unit_spawned"
+UNIT_DISBANDED = "unit_disbanded"
 UNIT_CAPTURED = "unit_captured"
 COMBAT_RESOLVED = "combat_resolved"
 

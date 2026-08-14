@@ -190,8 +190,10 @@ def _end_turn(s: State, out: list[Event]) -> None:
             economy.assign_tiles(s, city)
 
         gold, science, culture = economy.player_output(s, player_id)
-        player.gold = max(0, player.gold + gold)
+        player.gold += gold
         player.culture += culture
+        if player.gold < 0:
+            _go_bankrupt(s, player_id, out)
 
         completed, tech = economy.research_progress(s, player, science)
         if completed and tech is not None:
@@ -235,6 +237,46 @@ def _develop_worked_water(s: State, city: City) -> None:
             continue
         if TERRAIN[tile.terrain].navigable:
             s.tiles[key] = tile.model_copy(update={"improvement": Improvement.FISHING_BOATS})
+
+
+def _go_bankrupt(s: State, player_id: str, out: list[Event]) -> None:
+    """Disband units until the treasury is solvent again.
+
+    Gold used to be clamped at zero, which made upkeep decorative: a civ could
+    run at -19 gold per turn forever and keep building. "Can I afford this army"
+    was not a real question, and the heuristic bots duly fielded 120 units on
+    four cities.
+
+    Costliest upkeep first, and civilians are disbanded last - losing a settler
+    to an accounting shortfall is a far worse outcome than losing a warrior.
+    """
+    player = s.players[player_id]
+    while player.gold < 0:
+        candidates = s.units_of(player_id)
+        if not candidates:
+            player.gold = 0
+            return
+        victim = max(
+            candidates,
+            key=lambda u: (UNITS[u.type].upkeep, not UNITS[u.type].civilian, u.id),
+        )
+        if UNITS[victim.type].upkeep == 0:
+            # Nothing left that costs anything; the shortfall is building
+            # upkeep, which cannot be disbanded away.
+            player.gold = 0
+            return
+        del s.units[victim.id]
+        player.gold += UNITS[victim.type].upkeep
+        out.append(
+            ev.event(
+                s.turn,
+                ev.UNIT_DISBANDED,
+                f"{player.civ_name} could not pay its {victim.type.value} and disbanded it",
+                actor=player_id,
+                unit_id=victim.id,
+                unit_type=victim.type.value,
+            )
+        )
 
 
 def _advance_city(s: State, city: City, out: list[Event]) -> None:
