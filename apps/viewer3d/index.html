@@ -95,7 +95,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/OrbitControls.js";
 import {
   HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
-  buildTerrain, buildScatter, unitGeometry, baseGeometry,
+  buildTerrain, buildScatter, buildResources, buildBorders,
+  unitModel, baseGeometry,
   houseGeometry, towerGeometry, wallGeometry, cityLayout,
 } from "./world.js";
 
@@ -170,21 +171,36 @@ async function loadFrame(turn) {
   return frame;
 }
 
-async function ownersAt(turn) {
+/**
+ * Everything that is a running total rather than a per-turn fact.
+ *
+ * Borders are written as deltas, and "has this civ ever seen this tile" is by
+ * definition cumulative, so both are folded forward from turn 1. Frames are
+ * cached, so this is a loop over memory rather than a refetch.
+ */
+async function foldTo(turn) {
   const owners = new Array(S.match.terrain.length).fill(null);
+  const explored = new Map(S.match.civs.map((c) => [c.player_id, new Set()]));
   for (let t = 1; t <= turn; t++) {
     const f = await loadFrame(t);
     for (const [i, who] of Object.entries(f.owners || {})) owners[+i] = who;
+    for (const [pid, tiles] of Object.entries(f.visibility || {})) {
+      const seen = explored.get(pid);
+      if (seen) for (const i of tiles) seen.add(i);
+    }
   }
-  return owners;
+  return { owners, explored };
 }
 
 // --- rendering -------------------------------------------------------------
+// Recursive, because the border layer is a group of one mesh per civ and
+// popping it without walking into it would leak a geometry on every turn step.
 const clear = (group) => {
   while (group.children.length) {
-    const child = group.children.pop();
-    child.geometry?.dispose?.();
-    child.material?.dispose?.();
+    group.children.pop().traverse((o) => {
+      o.geometry?.dispose?.();
+      o.material?.dispose?.();
+    });
   }
 };
 
@@ -206,36 +222,46 @@ function instanced(geo, count, opts = {}) {
   return mesh;
 }
 
+/**
+ * Fog of war, in the three states Freeciv uses: currently in sight, seen
+ * before and remembered, and never visited.
+ *
+ * Applied to the terrain rather than only to the units on it. Hiding the units
+ * but leaving the ground fully lit was the weak part of the agent view, because
+ * the whole point of that view is seeing what a model could *not* see when it
+ * made a bad call - and unexplored ground is most of what it could not see.
+ */
+function applyFog(lit, explored) {
+  const shade = !lit
+    ? () => 1
+    : (i) => (lit.has(i) ? 1 : explored?.has(i) ? 0.5 : 0.13);
+  for (const layer of staticLayer.children) layer.userData.paint?.(shade);
+}
+
 async function drawTurn() {
   const f = S.frame;
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
-  const owners = await ownersAt(S.turn);
+  const { owners, explored } = await foldTo(S.turn);
+  const known = S.focus ? explored.get(S.focus) : null;
+  applyFog(lit, known);
   const at = (i) => {
     const [q, r] = S.match.tiles[i].split(",").map(Number);
     return axialToWorld(q, r);
   };
 
-  // Territory: a thin coloured slab laid on the ground, which reads as a claim
-  // from any angle without hiding the terrain under it.
-  const claimed = owners.map((o, i) => (o && (!lit || lit.has(i)) ? i : -1)).filter((i) => i >= 0);
-  if (claimed.length) {
-    // Same orientation rule as the terrain: pointy-top, full radius, no
-    // rotation. Slightly inset so a border reads as a claim painted on the
-    // tile rather than a second tile stacked on top of it.
-    const geo = new THREE.CylinderGeometry(0.92, 0.92, 0.05, 6);
-    const mesh = instanced(geo, claimed.length, { transparent: true, opacity: 0.34 });
-    claimed.forEach((i, n) => {
-      const [x, , z] = at(i);
-      M.makeScale(1, 1, 1).setPosition(x, topOf(i) + 0.02, z);
-      mesh.setMatrixAt(n, M);
-      mesh.setColorAt(n, C.setHex(hexOf(owners[i])));
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    mesh.castShadow = false;
-    dynamicLayer.add(mesh);
-  }
+  // Territory: a coloured line along the *edge* of the claim. See buildBorders
+  // for why this replaced a tint over the whole tile.
+  //
+  // Drawn on explored ground rather than only on what is currently in sight, so
+  // an empire keeps its shape in the agent view. That does show the *current*
+  // owner of a fogged tile rather than the last one this civ actually saw; the
+  // bundle carries no per-civ memory of ownership, and the alternative - border
+  // lines that blink out the moment a scout walks away - was worse.
+  dynamicLayer.add(buildBorders(
+    S.match.tiles, owners, topOf, hexOf, lit ? (i) => known?.has(i) : null
+  ));
 
   // Cities: houses, a tower for a temple or library, a wall ring if built.
   const cities = f.cities.filter((c) => !lit || lit.has(c.at));
@@ -296,21 +322,33 @@ async function drawTurn() {
   bases.castShadow = false;
   dynamicLayer.add(bases);
 
+  // Two meshes per unit type. `body` carries baked vertex colours - skin,
+  // leather, wood, steel - and is never tinted, because instance colour
+  // multiplies the whole mesh and tinting a soldier by his civ colour used to
+  // tint his skin and his sword blade with it. `livery` is the tunics, shields
+  // and sails, and is the only part that takes the civ colour.
   for (const type of UNIT_TYPES) {
     const of = visible.filter((u) => u.type === type);
     if (!of.length) continue;
-    const mesh = instanced(unitGeometry(type), of.length);
-    of.forEach((u, n) => {
-      const [x, , z] = at(u.at);
-      // Face the board centre, so armies read as oriented rather than scattered.
-      M.makeRotationY(Math.atan2(-x, -z)).setPosition(x, topOf(u.at) + (u.embarked ? -0.06 : 0.02), z);
-      mesh.setMatrixAt(n, M);
-      const base = new THREE.Color(hexOf(u.owner));
-      // Wounded units darken, so a battered stack is visible without a UI probe.
-      mesh.setColorAt(n, base.lerp(new THREE.Color(0x2a1216), (100 - u.hp) / 220));
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    dynamicLayer.add(mesh);
+    const model = unitModel(type);
+    for (const [geo, civ] of [[model.body, false], [model.livery, true]]) {
+      if (!geo) continue;
+      const mesh = instanced(geo, of.length, civ ? {} : { vertexColors: true });
+      of.forEach((u, n) => {
+        const [x, , z] = at(u.at);
+        // Face the board centre, so armies read as oriented rather than scattered.
+        M.makeRotationY(Math.atan2(-x, -z))
+          .setPosition(x, topOf(u.at) + (u.embarked ? -0.06 : 0.01), z);
+        mesh.setMatrixAt(n, M);
+        // Wounded units darken, so a battered stack is visible without a UI
+        // probe. On the body that multiplies the baked colours; on the livery
+        // it darkens the civ colour.
+        C.setHex(civ ? hexOf(u.owner) : 0xffffff);
+        mesh.setColorAt(n, C.lerp(new THREE.Color(0x2a1216), (100 - u.hp) / 220));
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      dynamicLayer.add(mesh);
+    }
   }
 }
 
@@ -374,6 +412,7 @@ function togglePlay() {
 
   staticLayer.add(buildTerrain(S.match.tiles, S.match.terrain));
   staticLayer.add(buildScatter(S.match.tiles, S.match.terrain));
+  staticLayer.add(buildResources(S.match.tiles, S.match.terrain, S.match.resources));
 
   // Frame the board from its actual bounds. A hardcoded camera distance cropped
   // the map off every edge, and would have broken again on any other radius.
