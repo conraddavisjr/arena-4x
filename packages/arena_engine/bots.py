@@ -29,6 +29,7 @@ from arena_engine.actions import (
     Reasoning,
     RespondToProposal,
     SetProduction,
+    SetRates,
     SetResearch,
 )
 from arena_engine.content import MIN_CITY_SPACING, TERRAIN, UNITS, UnitType
@@ -88,6 +89,7 @@ def act(state: State, player_id: str) -> Action:
     _order_units(state, player_id, legal, orders)
     _order_cities(state, player_id, legal, orders)
     _order_research(state, player_id, legal, orders)
+    _order_rates(state, player_id, orders)
 
     return Action(
         reasoning=Reasoning(
@@ -313,6 +315,11 @@ def _order_cities(state: State, player_id: str, legal: dict, out: list[Order]) -
         "navy": sum(1 for u in units if u.type is UnitType.TRIREME),
     }
     cities = state.cities_of(player_id)
+    # Upkeep is real: a civ that overspends has units disbanded out from under
+    # it. Building a soldier you cannot pay for and losing it next turn is pure
+    # churn, so check the books before adding to the payroll.
+    income, _, _ = economy.player_output(state, player_id)
+    broke = income <= 0 and state.players[player_id].gold < 25
 
     for city in cities:
         if city.building is not None:
@@ -320,7 +327,13 @@ def _order_cities(state: State, player_id: str, legal: dict, out: list[Order]) -
         options = legal["cities"].get(city.id, {}).get("build", [])
         if not options:
             continue
-        want = _wanted(state, city, len(cities), counts, options)
+        want = _wanted(state, city, len(cities), counts, options, broke)
+        if want is None:
+            # Nothing worth building. Let production bank rather than making
+            # units for their own sake: falling through to "best available"
+            # gave a four-city civ 120 units, which is not a strategy and blew
+            # the observation payload past its budget.
+            continue
         out.append(SetProduction(action="set_production", city_id=city.id, item=want))
         # Count the decision immediately, or every city in the empire decides
         # to build the same settler on the same turn.
@@ -339,7 +352,8 @@ def _wanted(
     city_count: int,
     counts: dict[str, int],
     options: list[str],
-) -> str:
+    broke: bool = False,
+) -> str | None:
     """Pick a build from what the civ actually lacks, not by list position.
 
     The list-position approach does not work here: `warrior` is buildable on
@@ -347,6 +361,10 @@ def _wanted(
     selects it every time and the civ never builds anything else.
     """
     military_target = max(2, city_count * GARRISON_PER_CITY)
+    if broke:
+        # Build the way out of it: gold buildings first, then anything free to
+        # maintain, and never another unit on the payroll.
+        return _first_available(["market", "granary", "library", "temple"], options)
 
     # A minimum garrison first; an undefended civ gets wiped out early.
     if counts["military"] < min(2, military_target):
@@ -383,12 +401,53 @@ def _wanted(
     if building:
         return building
 
-    return _first_available(MILITARY_ORDER, options) or options[0]
+    # Everything worth having is built. Keep a standing army proportional to the
+    # empire rather than an unbounded one: falling through to "best military
+    # unit" here produced 120 units on four cities, which is not a strategy and
+    # made the observation payload balloon past its budget.
+    if counts["military"] < military_target * 2:
+        return _first_available(MILITARY_ORDER, options)
+    return None
+
+
+def _affordable(options: list[str], preferred: list[str]) -> str | None:
+    """The best preferred option that costs nothing to maintain."""
+    free = {u.value for u in UnitType if UNITS[u].upkeep == 0} | {
+        b for b in options if not _is_unit_name(b)
+    }
+    return _first_available([p for p in preferred if p in free], options)
+
+
+def _is_unit_name(name: str) -> bool:
+    return name in {u.value for u in UnitType}
 
 
 def _first_available(preferred: list[str], options: list[str]) -> str | None:
     available = set(options)
     return next((item for item in preferred if item in available), None)
+
+
+def _order_rates(state: State, player_id: str, out: list[Order]) -> None:
+    """Balance the books with the tax slider before cutting the army.
+
+    Bots never touched this, so a civ running a deficit had units disbanded from
+    under it every turn while sitting on a lever that would have fixed it. Left
+    alone that produced 794 disbands in a single match, and then - once building
+    was made income-aware - civs so cautious they fielded two units between them.
+    """
+    player = state.players[player_id]
+    income, _, _ = economy.player_output(state, player_id)
+
+    if income < 0 or (player.gold < 25 and income <= 0):
+        tax = min(100, player.tax_pct + 20)
+    elif player.gold > 150 and income > 4:
+        # Comfortable: buy research instead of hoarding.
+        tax = max(20, player.tax_pct - 20)
+    else:
+        return
+
+    if tax != player.tax_pct:
+        out.append(SetRates(action="set_rates", tax_pct=tax, science_pct=100 - tax))
 
 
 def _order_research(state: State, player_id: str, legal: dict, out: list[Order]) -> None:
