@@ -1,0 +1,217 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ARENA-4X model sheet</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<!--
+  Every model in the game, laid out on a turntable at close range.
+
+  This exists because the board viewer is the wrong tool for judging a model.
+  Orbiting to a unit dollies toward the camera target rather than toward the
+  thing you are looking at, so checking whether a soldier's mail reads or
+  whether a roof overhangs its walls meant a minute of fighting the controls
+  for a two-second look. Here every model is in front of you at once, at a
+  distance where its texture is actually visible.
+
+  It is also the fastest way to see the whole roster after changing a shared
+  part - the person builder feeds a dozen units, and a change to it is easy to
+  get right for spearmen and wrong for the settler's walking escort.
+-->
+<style>
+  :root { --bg:#0f141b; --ink:#e6edf3; --dim:#8b949e; --line:#222a35; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
+    font:12px/1.4 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}
+  canvas{display:block}
+  #labels{position:fixed;inset:0;pointer-events:none}
+  .tag{position:absolute;transform:translate(-50%,0);color:var(--dim);
+    font-variant-numeric:tabular-nums;white-space:nowrap;text-shadow:0 1px 3px #000}
+  header{position:fixed;top:0;left:0;right:0;z-index:2;display:flex;gap:8px;align-items:center;
+    padding:10px 14px;background:linear-gradient(#0f141be6,#0f141b00)}
+  h1{font-size:13px;margin:0;font-weight:600;letter-spacing:.04em}
+  button{background:#1b222c;color:var(--ink);border:1px solid var(--line);padding:5px 10px;
+    border-radius:5px;cursor:pointer;font:inherit}
+  button:hover{background:#28313d}
+  button[aria-pressed="true"]{background:#2f6feb;border-color:#2f6feb}
+  .hint{margin-left:auto;color:var(--dim)}
+</style>
+
+<header>
+  <h1>ARENA-4X models</h1>
+  <button id="spin" aria-pressed="true">Spin</button>
+  <button id="civ">Civ colour</button>
+  <span class="hint">drag to orbit · scroll to zoom</span>
+</header>
+<div id="labels"></div>
+
+<script type="importmap">
+{"imports":{"three":"./vendor/three.module.min.js","three/":"./vendor/"}}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/OrbitControls.js";
+import {
+  CIV_COLOURS, unitModel, baseGeometry, surfaceAtlas, buildSettlements, SURFACE,
+} from "./world.js";
+
+const UNITS = ["settler","worker","scout","warrior","archer","spearman","swordsman",
+               "horseman","catapult","trireme","wolf","barbarian"];
+const COLUMNS = 5;
+const STEP = 2.2;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f141b);
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+
+scene.add(new THREE.HemisphereLight(0xbcd7ff, 0x2b2418, 1.6));
+const sun = new THREE.DirectionalLight(0xfff2d8, 2.1);
+sun.position.set(6, 10, 5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left:-14, right:14, top:14, bottom:-14, near:1, far:40 });
+scene.add(sun);
+
+// A neutral floor, so shadows land somewhere and the models are not floating.
+// Deliberately untextured: the atlas is a sheet of sixteen different patterns,
+// so mapping it across a plane stretches all sixteen over the ground.
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(80, 80).rotateX(-Math.PI / 2),
+  new THREE.MeshLambertMaterial({ color: 0x4a7d38 })
+);
+floor.receiveShadow = true;
+scene.add(floor);
+
+const turntable = new THREE.Group();
+scene.add(turntable);
+const tags = [];
+let civIndex = 0;
+const liveries = [];
+
+/** One cell of the sheet: a model, its label, and a slow spin of its own. */
+function cell(name, at, build) {
+  const pivot = new THREE.Group();
+  pivot.position.set(at[0], 0, at[1]);
+  build(pivot);
+  turntable.add(pivot);
+  const tag = document.createElement("div");
+  tag.className = "tag";
+  tag.textContent = name;
+  document.getElementById("labels").appendChild(tag);
+  tags.push([tag, pivot]);
+  return pivot;
+}
+
+const mesh = (geo, civ) => {
+  const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
+    flatShading: true, vertexColors: !civ, map: surfaceAtlas(),
+    side: civ ? THREE.FrontSide : THREE.DoubleSide,
+  }));
+  m.castShadow = true;
+  m.receiveShadow = true;
+  if (civ) liveries.push(m);
+  return m;
+};
+
+UNITS.forEach((type, i) => {
+  const at = [(i % COLUMNS - (COLUMNS - 1) / 2) * STEP, Math.floor(i / COLUMNS) * STEP];
+  cell(type, at, (pivot) => {
+    const model = unitModel(type);
+    if (model.body) pivot.add(mesh(model.body, false));
+    if (model.livery) pivot.add(mesh(model.livery, true));
+    const ring = mesh(baseGeometry(), true);
+    ring.position.y = 0.01;
+    pivot.add(ring);
+  });
+});
+
+// Settlements are built by the same function the board uses, so what shows up
+// here is exactly what shows up in a match rather than a second recipe.
+const TOWNS = [
+  ["hamlet", 2, []],
+  ["town", 6, ["walls"]],
+  ["capital", 11, ["walls", "temple"]],
+];
+TOWNS.forEach(([name, population, buildings], i) => {
+  const row = Math.ceil(UNITS.length / COLUMNS);
+  const at = [(i - (TOWNS.length - 1) / 2) * STEP * 1.6, row * STEP + 0.6];
+  cell(`${name} (pop ${population})`, at, (pivot) => {
+    const group = buildSettlements(
+      [{ at: 0, owner: "p1", population, buildings }],
+      () => [0, 0, 0],
+      () => CIV_COLOURS[civIndex]
+    );
+    group.traverse((o) => {
+      if (o.isInstancedMesh && !o.material.vertexColors) liveries.push(o);
+    });
+    pivot.add(group);
+  });
+});
+
+function recolour() {
+  const colour = new THREE.Color(CIV_COLOURS[civIndex]);
+  for (const m of liveries) {
+    if (m.isInstancedMesh) {
+      for (let i = 0; i < m.count; i++) m.setColorAt(i, colour);
+      m.instanceColor.needsUpdate = true;
+    } else {
+      m.material.color.copy(colour);
+    }
+  }
+}
+recolour();
+
+function resize() {
+  // updateStyle left on, unlike the board viewer: that one sizes its canvas
+  // from CSS, this one has no layout to size against, so without the style the
+  // canvas renders at devicePixelRatio times the window and every projected
+  // label lands in the wrong place.
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+
+// Frame the whole sheet from its actual extent, allowing for the viewport
+// being wider than it is tall - a fixed distance crops rows off the bottom on
+// any window that is not the one it was tuned on.
+const bounds = new THREE.Box3().setFromObject(turntable);
+const centre = bounds.getCenter(new THREE.Vector3());
+const size = bounds.getSize(new THREE.Vector3());
+const extent = Math.max(size.x, size.z);
+const fit = extent / (2 * Math.tan((camera.fov * Math.PI) / 360) * Math.min(1, camera.aspect)) * 1.2;
+controls.target.copy(centre).setY(0.4);
+camera.position.set(centre.x, fit * 0.55, centre.z + fit * 0.8);
+
+let spinning = true;
+document.getElementById("spin").onclick = (e) => {
+  spinning = !spinning;
+  e.target.setAttribute("aria-pressed", spinning);
+};
+document.getElementById("civ").onclick = () => {
+  civIndex = (civIndex + 1) % CIV_COLOURS.length;
+  recolour();
+};
+
+const at = new THREE.Vector3();
+(function loop() {
+  requestAnimationFrame(loop);
+  if (spinning) for (const child of turntable.children) child.rotation.y += 0.006;
+  controls.update();
+  renderer.render(scene, camera);
+  for (const [tag, pivot] of tags) {
+    at.copy(pivot.position).project(camera);
+    tag.style.left = `${(at.x * 0.5 + 0.5) * innerWidth}px`;
+    tag.style.top = `${(-at.y * 0.5 + 0.5) * innerHeight + 8}px`;
+    tag.style.opacity = at.z < 1 ? 1 : 0;
+  }
+})();
+</script>
