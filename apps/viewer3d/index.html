@@ -95,9 +95,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/OrbitControls.js";
 import {
   HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
-  buildTerrain, buildScatter, buildResources, buildBorders,
-  unitModel, baseGeometry,
-  houseGeometry, towerGeometry, wallGeometry, cityLayout,
+  buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements,
+  unitModel, baseGeometry, surfaceAtlas,
 } from "./world.js";
 
 const BASE = new URLSearchParams(location.search).get("match") || ".";
@@ -263,51 +262,13 @@ async function drawTurn() {
     S.match.tiles, owners, topOf, hexOf, lit ? (i) => known?.has(i) : null
   ));
 
-  // Cities: houses, a tower for a temple or library, a wall ring if built.
+  // Towns: plaza, buildings, a curtain wall if built, a keep for a temple or
+  // wonder. Walls take their own baked colours; only the roofs carry the civ.
   const cities = f.cities.filter((c) => !lit || lit.has(c.at));
-  if (cities.length) {
-    const layouts = cities.map((c, n) => cityLayout(c.population, n + c.at));
-    const houses = instanced(houseGeometry(), layouts.reduce((a, l) => a + l.length, 0));
-    let hn = 0;
-    cities.forEach((c, ci) => {
-      const [x, , z] = at(c.at);
-      const top = topOf(c.at);
-      for (const [dx, dy, dz] of layouts[ci]) {
-        M.makeRotationY(((c.at + hn) % 6) * 0.5).setPosition(x + dx, top + dy, z + dz);
-        houses.setMatrixAt(hn, M);
-        houses.setColorAt(hn, C.setHex(hexOf(c.owner)).lerp(new THREE.Color(0xf0e6cf), 0.55));
-        hn++;
-      }
-    });
-    houses.instanceMatrix.needsUpdate = true;
-    dynamicLayer.add(houses);
-
-    const spired = cities.filter((c) =>
-      c.buildings.some((b) => ["temple","great_library","pyramids","apex_project"].includes(b)));
-    if (spired.length) {
-      const towers = instanced(towerGeometry(), spired.length, { color: 0xece2cb });
-      spired.forEach((c, n) => {
-        const [x, , z] = at(c.at);
-        M.makeScale(1, 1, 1).setPosition(x, topOf(c.at), z);
-        towers.setMatrixAt(n, M);
-      });
-      towers.instanceMatrix.needsUpdate = true;
-      dynamicLayer.add(towers);
-    }
-
-    const walled = cities.filter((c) => c.buildings.includes("walls"));
-    if (walled.length) {
-      const walls = instanced(wallGeometry(), walled.length,
-        { color: 0xcfc6ae, side: THREE.DoubleSide });
-      walled.forEach((c, n) => {
-        const [x, , z] = at(c.at);
-        M.makeScale(1, 1, 1).setPosition(x, topOf(c.at) + 0.12, z);
-        walls.setMatrixAt(n, M);
-      });
-      walls.instanceMatrix.needsUpdate = true;
-      dynamicLayer.add(walls);
-    }
-  }
+  dynamicLayer.add(buildSettlements(cities, (tile) => {
+    const [x, , z] = at(tile);
+    return [x, topOf(tile), z];
+  }, hexOf));
 
   // Units, one instanced mesh per type plus a shared ownership ring.
   const visible = f.units.filter((u) => !lit || lit.has(u.at));
@@ -333,7 +294,9 @@ async function drawTurn() {
     const model = unitModel(type);
     for (const [geo, civ] of [[model.body, false], [model.livery, true]]) {
       if (!geo) continue;
-      const mesh = instanced(geo, of.length, civ ? {} : { vertexColors: true });
+      const mesh = instanced(geo, of.length, {
+        map: surfaceAtlas(), vertexColors: !civ,
+      });
       of.forEach((u, n) => {
         const [x, , z] = at(u.at);
         // Face the board centre, so armies read as oriented rather than scattered.

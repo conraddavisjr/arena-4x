@@ -9,7 +9,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine lint fmt clean bots map view view3d export
+.PHONY: help setup setup-engine env test test-engine lint fmt clean bots map view view3d stage3d export
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -61,9 +61,12 @@ clean:  ## Remove caches and build artifacts
 	rm -rf .pytest_cache .ruff_cache .hypothesis build dist
 	find . -type d -name __pycache__ -not -path './.venv/*' -exec rm -rf {} +
 
+# `--directory` rather than `cd`: PY is a path relative to the repo root, so
+# changing into the bundle first put the interpreter out of reach and every
+# serve target failed with "No such file or directory".
 view:  ## Serve an exported match in the browser. make view MATCH=output/match-4
 	@echo "http://localhost:8123/  (ctrl-c to stop)"
-	@cd $(or $(MATCH),output/match-4) && $(PY) -m http.server 8123 --bind 127.0.0.1
+	@$(PY) -m http.server 8123 --bind 127.0.0.1 --directory $(or $(MATCH),output/match-4)
 
 export:  ## Play a match and write a replay bundle. make export SEED=4
 	$(PY) scripts/export_match.py --seed $(or $(SEED),4)
@@ -71,8 +74,13 @@ export:  ## Play a match and write a replay bundle. make export SEED=4
 	@echo "then: make view MATCH=output/match-$(or $(SEED),4)"
 
 view3d:  ## Serve the 3D world viewer. make view3d MATCH=output/match-4
+	@$(MAKE) -s stage3d MATCH=$(or $(MATCH),output/match-4)
+	@echo "board:  http://localhost:8123/world.html"
+	@echo "models: http://localhost:8123/models.html   (ctrl-c to stop)"
+	@$(PY) -m http.server 8123 --bind 127.0.0.1 --directory $(or $(MATCH),output/match-4)
+
+stage3d:
 	@cp -r apps/viewer3d/vendor $(or $(MATCH),output/match-4)/vendor
 	@cp apps/viewer3d/world.js $(or $(MATCH),output/match-4)/world.js
 	@cp apps/viewer3d/index.html $(or $(MATCH),output/match-4)/world.html
-	@echo "http://localhost:8123/world.html  (ctrl-c to stop)"
-	@cd $(or $(MATCH),output/match-4) && $(PY) -m http.server 8123 --bind 127.0.0.1
+	@cp apps/viewer3d/models.html $(or $(MATCH),output/match-4)/models.html

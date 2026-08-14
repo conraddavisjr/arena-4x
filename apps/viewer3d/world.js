@@ -75,6 +75,299 @@ function rand(seed) {
 }
 
 // ---------------------------------------------------------------------------
+// Surface atlas
+// ---------------------------------------------------------------------------
+
+/**
+ * One texture holding sixteen surface patterns, and the UV remapping that lets
+ * a model made of a dozen merged parts sample a different one per part.
+ *
+ * The problem this solves: a unit is a single merged geometry drawn in one
+ * call, so it gets exactly one texture - but a soldier needs cloth on his
+ * tunic, mail on his helmet, wood on his spear shaft and steel on its head.
+ * Packing every pattern into one atlas and rewriting each part's UVs into its
+ * own cell at merge time gives per-part materials at no extra draw cost.
+ *
+ * Every cell is drawn near-white, because it multiplies against the vertex
+ * colour that carries the hue and the instance colour that carries the civ
+ * livery. The texture supplies grain; it never supplies colour. That is the
+ * same division the terrain uses.
+ *
+ * `flipY` is off so canvas coordinates and UV coordinates agree, and each
+ * cell's UVs are inset by a pixel so mip filtering cannot bleed a neighbouring
+ * pattern in along the seam.
+ */
+const CELL = 128;
+const GRID = 4;
+const INSET = 1 / CELL;
+
+export const SURFACE = {
+  plain: 0, skin: 1, weave: 2, mail: 3,
+  leather: 4, wood: 5, metal: 6, fur: 7,
+  hide: 8, stone: 9, plaster: 10, thatch: 11,
+  tile: 12, timber: 13, canvas: 14, scales: 15,
+};
+
+/** Pattern painters. Each draws into a CELL-sized square at the origin. */
+const PATTERNS = {
+  plain: (g, s, r) => speckle(g, s, r, 120, 3, 14, 0.25),
+  skin: (g, s, r) => speckle(g, s, r, 260, 4, 20, 0.2),
+  weave: (g, s, r) => {
+    // Crosshatch, which is what cloth reads as once it is too small to see.
+    hatch(g, s, 5, 26, 0.55, 0);
+    hatch(g, s, 5, 20, 0.45, Math.PI / 2);
+  },
+  mail: (g, s, r) => {
+    for (let y = 3; y < s; y += 7) {
+      for (let x = (y % 14 ? 3 : 7); x < s; x += 7) {
+        g.strokeStyle = "rgba(120,120,120,0.55)";
+        g.lineWidth = 1.4;
+        g.beginPath();
+        g.arc(x, y, 2.4, 0, Math.PI * 2);
+        g.stroke();
+      }
+    }
+  },
+  leather: (g, s, r) => {
+    speckle(g, s, r, 180, 9, 40, 0.3);
+    crease(g, s, r, 14, 30, 0.35);
+  },
+  wood: (g, s, r) => {
+    // Grain runs along one axis, with a couple of knots.
+    for (let i = 0; i < 26; i++) {
+      const v = 255 - 30 - r(i * 7) * 55;
+      g.strokeStyle = `rgba(${v},${v},${v},0.6)`;
+      g.lineWidth = 0.7 + r(i * 11) * 1.8;
+      g.beginPath();
+      const x = r(i * 13) * s;
+      for (let y = 0; y <= s; y += 6) g.lineTo(x + Math.sin(y / 26 + i) * 3.5, y);
+      g.stroke();
+    }
+    for (let i = 0; i < 2; i++) {
+      g.strokeStyle = "rgba(150,150,150,0.5)";
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.ellipse(r(i * 3 + 1) * s, r(i * 5 + 2) * s, 4, 7, 0, 0, Math.PI * 2);
+      g.stroke();
+    }
+  },
+  metal: (g, s, r) => {
+    // Brushed streaks plus one brighter band, which is what sells a blade at
+    // this size far more than any amount of surface detail.
+    for (let i = 0; i < 70; i++) {
+      const v = 255 - r(i * 17) * 46;
+      g.strokeStyle = `rgba(${v},${v},${v},0.5)`;
+      g.lineWidth = 0.6 + r(i * 23) * 1.2;
+      const y = r(i * 29) * s;
+      g.beginPath();
+      g.moveTo(0, y);
+      g.lineTo(s, y + (r(i * 31) - 0.5) * 5);
+      g.stroke();
+    }
+    const band = g.createLinearGradient(0, 0, 0, s);
+    band.addColorStop(0, "rgba(255,255,255,0)");
+    band.addColorStop(0.45, "rgba(255,255,255,0.85)");
+    band.addColorStop(1, "rgba(160,160,160,0.35)");
+    g.fillStyle = band;
+    g.fillRect(0, 0, s, s);
+  },
+  fur: (g, s, r) => strokes(g, s, r, 900, 7, 70, -0.5),
+  hide: (g, s, r) => {
+    strokes(g, s, r, 400, 5, 40, -0.4);
+    // Dappling, which is the one marking that says deer rather than dog.
+    for (let i = 0; i < 26; i++) {
+      g.fillStyle = "rgba(255,255,255,0.75)";
+      g.beginPath();
+      g.ellipse(r(i * 19) * s, r(i * 37) * s, 3.5, 2.6, r(i) * 3, 0, Math.PI * 2);
+      g.fill();
+    }
+  },
+  stone: (g, s, r) => {
+    // Courses of blocks with mortar between them.
+    g.strokeStyle = "rgba(105,105,105,0.6)";
+    g.lineWidth = 1.6;
+    const rows = 6;
+    for (let row = 0; row < rows; row++) {
+      const y = (row / rows) * s;
+      g.beginPath();
+      g.moveTo(0, y);
+      g.lineTo(s, y);
+      g.stroke();
+      const step = s / 4;
+      for (let x = (row % 2 ? step / 2 : 0); x < s; x += step) {
+        g.beginPath();
+        g.moveTo(x, y);
+        g.lineTo(x, y + s / rows);
+        g.stroke();
+      }
+    }
+    speckle(g, s, r, 300, 4, 26, 0.22);
+  },
+  plaster: (g, s, r) => speckle(g, s, r, 340, 7, 26, 0.22),
+  thatch: (g, s, r) => strokes(g, s, r, 700, 12, 62, 0.9),
+  tile: (g, s, r) => {
+    // Overlapping scallops in courses, read as a tiled roof from above.
+    const step = s / 8;
+    for (let row = 0; row < 8; row++) {
+      for (let col = -1; col < 9; col++) {
+        const x = col * step + (row % 2 ? step / 2 : 0);
+        const y = row * step;
+        g.strokeStyle = "rgba(110,110,110,0.6)";
+        g.lineWidth = 1.5;
+        g.beginPath();
+        g.arc(x + step / 2, y, step / 2, 0, Math.PI);
+        g.stroke();
+      }
+    }
+  },
+  timber: (g, s, r) => {
+    PATTERNS.plaster(g, s, r);
+    // Half-timbering: dark posts and a rail over pale infill.
+    g.fillStyle = "rgba(90,90,90,0.7)";
+    for (const x of [0.06, 0.47, 0.88]) g.fillRect(x * s, 0, s * 0.06, s);
+    g.fillRect(0, s * 0.46, s, s * 0.06);
+  },
+  canvas: (g, s, r) => {
+    PATTERNS.weave(g, s, r);
+    // Ribs, which is what makes a wagon tilt or a sail read as stretched.
+    g.strokeStyle = "rgba(120,120,120,0.5)";
+    g.lineWidth = 2.4;
+    for (let x = s / 8; x < s; x += s / 4) {
+      g.beginPath();
+      g.moveTo(x, 0);
+      g.lineTo(x, s);
+      g.stroke();
+    }
+  },
+  scales: (g, s, r) => {
+    const step = s / 10;
+    for (let row = 0; row < 11; row++) {
+      for (let col = -1; col < 11; col++) {
+        g.strokeStyle = "rgba(115,115,115,0.55)";
+        g.lineWidth = 1.2;
+        g.beginPath();
+        g.arc(col * step + (row % 2 ? step / 2 : 0) + step / 2, row * step, step / 2, 0, Math.PI);
+        g.stroke();
+      }
+    }
+  },
+};
+
+function speckle(g, s, r, count, size, dark, alpha) {
+  for (let i = 0; i < count; i++) {
+    const v = 255 - dark * (0.4 + r(i * 7));
+    g.fillStyle = `rgba(${v},${v},${v},${alpha})`;
+    const rx = size * (0.3 + r(i * 41) * 0.7);
+    g.beginPath();
+    g.ellipse(r(i * 13) * s, r(i * 29) * s, rx, rx * (0.4 + r(i * 53)), r(i * 67) * Math.PI,
+      0, Math.PI * 2);
+    g.fill();
+  }
+}
+
+function strokes(g, s, r, count, len, dark, angle) {
+  for (let i = 0; i < count; i++) {
+    const v = 255 - dark * (0.3 + r(i * 7));
+    g.strokeStyle = `rgba(${v},${v},${v},0.5)`;
+    g.lineWidth = 0.8 + r(i * 3) * 0.8;
+    const x = r(i * 13) * s;
+    const y = r(i * 29) * s;
+    const a = angle + (r(i * 43) - 0.5) * 0.6;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len);
+    g.stroke();
+  }
+}
+
+function hatch(g, s, gap, dark, alpha, angle) {
+  g.save();
+  g.translate(s / 2, s / 2);
+  g.rotate(angle);
+  g.translate(-s, -s);
+  g.strokeStyle = `rgba(${255 - dark},${255 - dark},${255 - dark},${alpha})`;
+  g.lineWidth = 1;
+  for (let y = 0; y < s * 2; y += gap) {
+    g.beginPath();
+    g.moveTo(0, y);
+    g.lineTo(s * 2, y);
+    g.stroke();
+  }
+  g.restore();
+}
+
+function crease(g, s, r, count, dark, alpha) {
+  g.strokeStyle = `rgba(${255 - dark},${255 - dark},${255 - dark},${alpha})`;
+  g.lineWidth = 1.1;
+  for (let i = 0; i < count; i++) {
+    g.beginPath();
+    g.moveTo(r(i * 11) * s, r(i * 17) * s);
+    g.bezierCurveTo(r(i * 19) * s, r(i * 23) * s, r(i * 29) * s, r(i * 31) * s,
+      r(i * 37) * s, r(i * 41) * s);
+    g.stroke();
+  }
+}
+
+let atlas = null;
+
+export function surfaceAtlas() {
+  if (atlas) return atlas;
+  const size = CELL * GRID;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#ffffff";
+  g.fillRect(0, 0, size, size);
+
+  for (const [name, index] of Object.entries(SURFACE)) {
+    let seed = 0;
+    for (const ch of name) seed = (seed * 131 + ch.charCodeAt(0)) | 0;
+    g.save();
+    g.beginPath();
+    g.rect((index % GRID) * CELL, Math.floor(index / GRID) * CELL, CELL, CELL);
+    g.clip();
+    g.translate((index % GRID) * CELL, Math.floor(index / GRID) * CELL);
+    PATTERNS[name](g, CELL, (n) => rand(seed + n));
+    g.restore();
+  }
+
+  atlas = new THREE.CanvasTexture(canvas);
+  atlas.colorSpace = THREE.SRGBColorSpace;
+  atlas.flipY = false;
+  atlas.wrapS = atlas.wrapT = THREE.ClampToEdgeWrapping;
+  atlas.anisotropy = 4;
+  return atlas;
+}
+
+/** Rewrite a part's UVs into one atlas cell. */
+function surface(geo, cell) {
+  const uv = geo.attributes.uv;
+  const cx = cell % GRID;
+  const cy = Math.floor(cell / GRID);
+  const span = 1 - 2 * INSET;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(
+      i,
+      (cx + INSET + uv.getX(i) * span) / GRID,
+      (cy + INSET + uv.getY(i) * span) / GRID
+    );
+  }
+  return geo;
+}
+
+/** Give a part its hue and its grain: a vertex colour for the one, an atlas
+ *  cell for the other. Parts prepared this way merge into a single geometry
+ *  and still shade and texture independently. */
+function material(geo, hex, cell) {
+  const c = new THREE.Color(hex);
+  const n = geo.attributes.position.count;
+  const colours = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) c.toArray(colours, i * 3);
+  geo.setAttribute("color", new THREE.BufferAttribute(colours, 3));
+  return surface(geo, cell);
+}
+
+// ---------------------------------------------------------------------------
 // Terrain
 // ---------------------------------------------------------------------------
 
@@ -500,35 +793,45 @@ export function buildScatter(tiles, terrain) {
  *
  * Offset off-centre so a marker never sits under a unit or a city.
  */
+/** A four-legged animal, which both the deer and the wild horses are built on. */
+function beast({ hide, length = 0.26, height = 0.17, antlers = false }) {
+  const parts = [
+    tint(box(length, 0.1, 0.1).translate(0, height, 0), hide),
+    tint(box(0.07, 0.13, 0.07).rotateZ(-0.4).translate(length * 0.42, height + 0.08, 0), hide),
+    tint(box(0.1, 0.06, 0.065).translate(length * 0.58, height + 0.13, 0), hide),
+    ...[-1, 1].flatMap((sx) => [0.04, -0.04].map((z) =>
+      tint(cyl(0.018, 0.014, height, 4).translate(sx * length * 0.34, height / 2, z), hide))),
+    tint(cyl(0, 0.022, 0.08, 4).rotateZ(0.6).translate(-length * 0.52, height + 0.05, 0), hide),
+  ];
+  if (antlers) {
+    for (const z of [0.03, -0.03]) {
+      parts.push(tint(cyl(0.008, 0.008, 0.11, 4).rotateZ(-0.3).translate(
+        length * 0.55, height + 0.21, z), hide));
+      for (const tip of [-0.03, 0.03]) {
+        parts.push(tint(cyl(0, 0.012, 0.06, 4).rotateZ(tip * 12).translate(
+          length * 0.55 + tip, height + 0.28, z), hide));
+      }
+    }
+  }
+  return mergeGeometries(parts);
+}
+
 const RESOURCE_MODELS = {
-  wheat: () => ({
-    colour: 0xe8c65c,
-    geo: mergeGeometries([0, 1, 2].map((k) =>
-      cyl(0, 0.05, 0.26, 5).rotateZ((k - 1) * 0.3).translate((k - 1) * 0.06, 0.13, 0))),
-  }),
-  iron: () => ({ colour: 0x7f858e, geo: new THREE.OctahedronGeometry(0.11).translate(0, 0.1, 0) }),
-  gold_ore: () => ({ colour: 0xffcf3d, geo: new THREE.OctahedronGeometry(0.1).translate(0, 0.1, 0) }),
-  horses: () => ({
-    colour: 0x8d5a35,
-    geo: mergeGeometries([
-      new THREE.BoxGeometry(0.24, 0.1, 0.1).translate(0, 0.16, 0),
-      new THREE.BoxGeometry(0.08, 0.14, 0.08).translate(0.11, 0.24, 0),
-    ]),
-  }),
-  deer: () => ({
-    colour: 0xa8703c,
-    geo: mergeGeometries([
-      new THREE.BoxGeometry(0.22, 0.1, 0.1).translate(0, 0.16, 0),
-      cyl(0, 0.04, 0.14, 4).translate(0.1, 0.28, 0),
-    ]),
-  }),
-  fish: () => ({
-    colour: 0x86d8ea,
-    geo: mergeGeometries([
-      new THREE.SphereGeometry(0.09, 7, 5).scale(1.5, 0.7, 0.8).translate(0, 0.04, 0),
-      cyl(0, 0.07, 0.12, 4).rotateZ(Math.PI / 2).translate(-0.16, 0.04, 0),
-    ]),
-  }),
+  wheat: () => mergeGeometries([0, 1, 2].map((k) =>
+    tint(cyl(0, 0.05, 0.26, 5).rotateZ((k - 1) * 0.3).translate((k - 1) * 0.06, 0.13, 0),
+      THATCH))),
+  iron: () => material(new THREE.OctahedronGeometry(0.11).translate(0, 0.1, 0),
+    0x7f858e, SURFACE.stone),
+  gold_ore: () => material(new THREE.OctahedronGeometry(0.1).translate(0, 0.1, 0),
+    0xffcf3d, SURFACE.metal),
+  horses: () => beast({ hide: HORSEHIDE, length: 0.3, height: 0.19 }),
+  deer: () => beast({ hide: DEERHIDE, antlers: true }),
+  fish: () => mergeGeometries([
+    material(new THREE.SphereGeometry(0.09, 7, 5).scale(1.5, 0.7, 0.8).translate(0, 0.04, 0),
+      0x86d8ea, SURFACE.scales),
+    material(cyl(0, 0.07, 0.12, 4).rotateZ(Math.PI / 2).translate(-0.16, 0.04, 0),
+      0x86d8ea, SURFACE.scales),
+  ]),
 };
 
 export function buildResources(tiles, terrain, resources) {
@@ -541,11 +844,15 @@ export function buildResources(tiles, terrain, resources) {
   }
 
   const m = new THREE.Matrix4();
+  const white = new THREE.Color(0xffffff);
   for (const [kind, targets] of byKind) {
-    const { geo, colour } = RESOURCE_MODELS[kind]();
     const mesh = new THREE.InstancedMesh(
-      geo,
-      new THREE.MeshLambertMaterial({ flatShading: true }),
+      RESOURCE_MODELS[kind](),
+      // Hue and grain are baked into the geometry, so the instance colour is
+      // white and exists only so fog can darken it.
+      new THREE.MeshLambertMaterial({
+        flatShading: true, vertexColors: true, map: surfaceAtlas(),
+      }),
       targets.length
     );
     const base = [];
@@ -555,8 +862,8 @@ export function buildResources(tiles, terrain, resources) {
       m.makeRotationY((i % 6) * 1.05);
       m.setPosition(x - 0.34, HEIGHT[terrain[i]] ?? 0.36, z + 0.42);
       mesh.setMatrixAt(n, m);
-      mesh.setColorAt(n, scratch.setHex(colour));
-      base.push(new THREE.Color(colour));
+      mesh.setColorAt(n, white);
+      base.push(white.clone());
     });
     mesh.instanceMatrix.needsUpdate = true;
     mesh.castShadow = true;
@@ -657,24 +964,38 @@ export function buildBorders(tiles, owners, heightOf, colourOf, visible) {
  * only part that takes the civ colour. Two draw calls per unit type.
  */
 const SKIN = 0xc08a5e;
-const LEATHER = 0x6b4a2f;
+const LEATHER = 0x8a6440;
 const WOOD = 0x8a6338;
 const STEEL = 0xb4bcc6;
 const HORSEHIDE = 0x6f4b31;
+const DEERHIDE = 0xa8763f;
 const FUR = 0x6e6a63;
 const EMBER = 0xff8a3d;
+const STONE = 0x9c968c;
+const PLASTER = 0xf2ead6;
+const THATCH = 0xb59457;
 
 const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
 
-/** Paint every vertex of a part one colour, so parts of different materials
- *  can be merged into a single geometry and still shade separately. */
+/**
+ * Which grain goes with which material.
+ *
+ * A material's colour and its surface are the same fact - steel is grey *and*
+ * brushed, thatch is straw-coloured *and* strawy - so the atlas cell follows
+ * from the colour rather than being passed at every call site.
+ */
+const GRAIN = new Map([
+  [SKIN, SURFACE.skin], [LEATHER, SURFACE.leather], [WOOD, SURFACE.wood],
+  [STEEL, SURFACE.metal], [HORSEHIDE, SURFACE.hide], [DEERHIDE, SURFACE.hide],
+  [FUR, SURFACE.fur], [STONE, SURFACE.stone], [PLASTER, SURFACE.plaster],
+  [THATCH, SURFACE.thatch], [EMBER, SURFACE.plain],
+]);
+
+/** Paint every vertex of a part one colour and point it at the matching atlas
+ *  cell, so parts of different materials can be merged into a single geometry
+ *  and still shade and texture separately. */
 function tint(geo, hex) {
-  const c = new THREE.Color(hex);
-  const n = geo.attributes.position.count;
-  const arr = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) c.toArray(arr, i * 3);
-  geo.setAttribute("color", new THREE.BufferAttribute(arr, 3));
-  return geo;
+  return material(geo, hex, GRAIN.get(hex) ?? SURFACE.plain);
 }
 
 /** Move a finished set of parts into position on the tile. */
@@ -703,7 +1024,13 @@ function person({ stride = 0, leftArm = 0.12, rightArm = 0.12, scale = 1 } = {})
     // a low-poly figure read as a toy block rather than as a person.
     tint(new THREE.SphereGeometry(0.048, 6, 4).translate(0, 0.375, 0), SKIN),
   ];
-  const livery = [box(0.128, 0.17, 0.085).translate(0, 0.25, 0)];
+  // A belt, which is worth its four triangles: it breaks the torso into two
+  // shapes and puts a second material at the waist, and without it the tunic
+  // is one flat slab and the figure reads as a sign board with legs.
+  body.push(tint(box(0.112, 0.026, 0.088).translate(0, 0.185, 0), LEATHER));
+  // Livery carries no vertex colour - the civ colour arrives as the instance
+  // colour - so it takes an atlas cell only.
+  const livery = [surface(box(0.105, 0.165, 0.082).translate(0, 0.255, 0), SURFACE.weave)];
   if (scale !== 1) for (const g of [...body, ...livery]) g.scale(scale, scale, scale);
   return { body, livery };
 }
@@ -736,7 +1063,8 @@ const TORCH = () => [
 // cylinder's axis is Y, so one rotateZ turns the disc to face forward (+x),
 // which is the direction every figure is built looking.
 const SHIELD = () => [
-  cyl(0.095, 0.095, 0.022, 8).rotateZ(Math.PI / 2).translate(0.02, 0.26, 0.11),
+  surface(cyl(0.095, 0.095, 0.022, 8).rotateZ(Math.PI / 2).translate(0.02, 0.26, 0.11),
+    SURFACE.scales),
 ];
 
 /** Four figures in a loose block, plus a fifth at the centre for larger units.
@@ -763,8 +1091,8 @@ function squad(count, make) {
 // A helmet is livery, and it earns its place twice: a second patch of civ
 // colour above the tunic, and a rounder silhouette at the top of the figure.
 const HELM = () => [
-  new THREE.SphereGeometry(0.054, 6, 3, 0, Math.PI * 2, 0, Math.PI / 1.9)
-    .translate(0, 0.372, 0),
+  surface(new THREE.SphereGeometry(0.054, 6, 3, 0, Math.PI * 2, 0, Math.PI / 1.9)
+    .translate(0, 0.372, 0), SURFACE.mail),
 ];
 
 const soldier = (k, kit, worn) => {
@@ -849,8 +1177,9 @@ function buildUnit(type) {
         ...[-0.14, 0.14].flatMap((x) => [0.12, -0.12].map((z) =>
           tint(cyl(0.075, 0.075, 0.028, 9).rotateX(Math.PI / 2).translate(x, 0.11, z), LEATHER))),
       ];
-      const livery = [new THREE.CylinderGeometry(0.14, 0.14, 0.32, 9, 1, false, 0, Math.PI)
-        .rotateZ(Math.PI / 2).translate(0, 0.3, 0)];
+      const livery = [surface(
+        new THREE.CylinderGeometry(0.14, 0.14, 0.32, 9, 1, false, 0, Math.PI)
+          .rotateZ(Math.PI / 2).translate(0, 0.3, 0), SURFACE.canvas)];
       const walker = person({ stride: 0.3, scale: 0.9 });
       place(walker.body, 0.3, 0.12, -0.4);
       place(walker.livery, 0.3, 0.12, -0.4);
@@ -895,7 +1224,7 @@ function buildUnit(type) {
         ...[-0.18, 0, 0.18].flatMap((x) => [0.13, -0.13].map((z) =>
           tint(cyl(0.009, 0.009, 0.26, 4).rotateX(z > 0 ? 0.9 : -0.9).translate(x, 0.11, z), WOOD))),
       ];
-      const livery = [box(0.012, 0.28, 0.3).translate(0.01, 0.42, 0)];
+      const livery = [surface(box(0.012, 0.28, 0.3).translate(0.01, 0.42, 0), SURFACE.canvas)];
       const rower = person({ scale: 0.7 });
       place(rower.body, -0.1, 0, 0);
       place(rower.livery, -0.1, 0, 0);
@@ -907,8 +1236,13 @@ function buildUnit(type) {
       for (const [k, [x, z]] of [[0, [-0.14, -0.1]], [1, [0.14, 0.12]]]) {
         const parts = [
           tint(box(0.3, 0.12, 0.12).translate(0, 0.19, 0), FUR),
-          tint(box(0.13, 0.11, 0.11).translate(0.19, 0.23, 0), FUR),
-          tint(cyl(0, 0.035, 0.13, 4).rotateZ(-0.7).translate(-0.18, 0.26, 0), FUR),
+          tint(box(0.11, 0.1, 0.1).translate(0.18, 0.23, 0), FUR),
+          // Muzzle and ears. Without them the head is a cube and the animal
+          // could be anything with four legs.
+          tint(box(0.07, 0.055, 0.06).translate(0.27, 0.2, 0), FUR),
+          ...[0.032, -0.032].map((ez) =>
+            tint(cyl(0, 0.028, 0.06, 4).translate(0.155, 0.3, ez), FUR)),
+          tint(cyl(0, 0.035, 0.15, 4).rotateZ(-0.9).translate(-0.19, 0.25, 0), FUR),
           ...[-0.1, 0.1].flatMap((bx) => [0.045, -0.045].map((bz) =>
             tint(cyl(0.024, 0.02, 0.19, 4).translate(bx, 0.09, bz), FUR))),
         ];
@@ -946,43 +1280,163 @@ export function baseGeometry() {
 // Settlements
 // ---------------------------------------------------------------------------
 
-export function houseGeometry() {
-  return mergeGeometries([
-    new THREE.BoxGeometry(0.24, 0.2, 0.24).translate(0, 0.1, 0),
-    cyl(0, 0.2, 0.16, 4).rotateY(Math.PI / 4).translate(0, 0.28, 0),
+/**
+ * Towns, not camps.
+ *
+ * The previous version was a scatter of pale boxes with pyramid caps, all one
+ * colour because the whole building took the civ tint. That is why they read
+ * as tents: a building is legible as a building precisely because its roof is
+ * a different material from its walls, and flattening both to one hue removed
+ * the only cue that mattered.
+ *
+ * So a settlement is built the same way a unit is. **Walls are body** - stone
+ * footing, timbered plaster - with their colours and grain baked in and never
+ * tinted. **Roofs are livery** and carry the civ colour, which turns out to be
+ * the better place for it anyway: a roofline is what you see of a town from a
+ * camera looking down, so an empire's colour reads from directly above without
+ * a single flag or plate on the board.
+ */
+function building(w, h, d, roofHeight) {
+  const walls = mergeGeometries([
+    tint(box(w + 0.035, 0.035, d + 0.035).translate(0, 0.018, 0), STONE),
+    material(box(w, h, d).translate(0, 0.035 + h / 2, 0), PLASTER, SURFACE.timber),
   ]);
+  // A hip roof: a four-sided pyramid turned so its eaves run parallel to the
+  // walls, sized to overhang them by a tenth, then stretched along the long axis.
+  const roof = cyl(0, d * 0.78, roofHeight, 4).rotateY(Math.PI / 4);
+  roof.scale(w / d, 1, 1);
+  roof.translate(0, 0.035 + h + roofHeight / 2, 0);
+  return { walls, roof: surface(roof, SURFACE.tile) };
 }
 
-export function towerGeometry() {
-  return mergeGeometries([
-    cyl(0.09, 0.11, 0.52, 8).translate(0, 0.26, 0),
-    cyl(0, 0.14, 0.16, 8).translate(0, 0.6, 0),
-  ]);
+// Walls tall, roofs shallow. The camera looks down at maybe forty degrees, so
+// a roof as tall as its walls hides them completely and the town goes back to
+// being a cluster of coloured cones - the two-tone read only works if there is
+// enough wall left to see.
+const BUILDINGS = {
+  hall: () => building(0.42, 0.32, 0.26, 0.15),
+  cottage: () => building(0.24, 0.25, 0.22, 0.12),
+  hut: () => building(0.18, 0.19, 0.18, 0.11),
+};
+
+/** The paved ground a town stands on, which is what stops it looking like
+ *  buildings dropped onto open grass. */
+function plazaGeometry() {
+  return material(cyl(0.8, 0.84, 0.05, 14).translate(0, 0.025, 0), STONE, SURFACE.stone);
 }
 
-export function wallGeometry() {
-  // A low ring around the settlement. Visibly a fortification from above and
-  // from the side, which is the point of showing what a civ chose to build.
-  return new THREE.CylinderGeometry(0.82, 0.86, 0.24, 12, 1, true);
+/** A curtain wall with merlons. Visibly a fortification from above and from
+ *  the side, which is the point of showing what a civ chose to build. */
+function rampartGeometry() {
+  const parts = [
+    material(new THREE.CylinderGeometry(0.84, 0.9, 0.28, 16, 1, true).translate(0, 0.14, 0),
+      STONE, SURFACE.stone),
+  ];
+  for (let k = 0; k < 16; k++) {
+    const a = (k / 16) * Math.PI * 2;
+    parts.push(material(
+      box(0.1, 0.08, 0.06).rotateY(-a).translate(Math.sin(a) * 0.85, 0.31, Math.cos(a) * 0.85),
+      STONE, SURFACE.stone));
+  }
+  return mergeGeometries(parts);
+}
+
+/** A temple, library or wonder: a stone keep under a civ-coloured spire. */
+function keepModel() {
+  return {
+    walls: mergeGeometries([
+      material(cyl(0.11, 0.14, 0.52, 8).translate(0, 0.26, 0), STONE, SURFACE.stone),
+      material(cyl(0.17, 0.17, 0.04, 8).translate(0, 0.52, 0), STONE, SURFACE.stone),
+    ]),
+    roof: surface(cyl(0, 0.17, 0.26, 8).translate(0, 0.67, 0), SURFACE.tile),
+  };
 }
 
 /**
- * Where the buildings of a city sit, given its population.
+ * Where the buildings of a town sit, given its population.
  *
  * Deterministic: the same city has the same street plan on every replay, so
- * scrubbing back and forth does not rearrange the town.
+ * scrubbing back and forth does not rearrange the town. Every building faces
+ * the centre, which is what makes a cluster read as a settlement with a square
+ * rather than as houses dropped at random angles.
  */
 export function cityLayout(population, seed) {
-  const count = Math.min(7, 1 + Math.floor(population / 1.6));
-  const spots = [];
-  for (let k = 0; k < count; k++) {
-    if (k === 0) {
-      spots.push([0, 0, 0]);
-      continue;
-    }
+  const count = Math.min(6, 1 + Math.floor(population / 1.8));
+  const spots = [{ x: 0, z: 0, yaw: ((seed % 4) * Math.PI) / 2, variant: "hall" }];
+  for (let k = 1; k < count; k++) {
     const a = ((seed * 53 + k * 137) % 360) * (Math.PI / 180);
-    const d = 0.28 + ((seed * 17 + k * 41) % 30) / 100;
-    spots.push([Math.cos(a) * d, ((seed + k) % 3) * 0.02, Math.sin(a) * d]);
+    const d = 0.4 + ((seed * 17 + k * 41) % 26) / 100;
+    spots.push({
+      x: Math.cos(a) * d,
+      z: Math.sin(a) * d,
+      yaw: Math.atan2(-Math.cos(a), -Math.sin(a)),
+      variant: k % 3 === 0 ? "hut" : "cottage",
+    });
   }
   return spots;
+}
+
+/**
+ * Every settlement on the board, batched by part rather than by city.
+ *
+ * A mesh per city would be one draw call per city; grouping by building type
+ * keeps it to about ten for the whole map however many towns get founded.
+ */
+export function buildSettlements(cities, locate, colourOf) {
+  const group = new THREE.Group();
+  if (!cities.length) return group;
+
+  const white = new THREE.Color(0xffffff);
+  const M = new THREE.Matrix4();
+  const add = (geo, rows, civ) => {
+    if (!rows.length) return;
+    const mesh = new THREE.InstancedMesh(
+      geo,
+      new THREE.MeshLambertMaterial({
+        flatShading: true, vertexColors: !civ, map: surfaceAtlas(),
+        side: civ ? THREE.FrontSide : THREE.DoubleSide,
+      }),
+      rows.length
+    );
+    rows.forEach(([city, x, y, z, yaw], n) => {
+      M.makeRotationY(yaw).setPosition(x, y, z);
+      mesh.setMatrixAt(n, M);
+      mesh.setColorAt(n, civ ? scratch.setHex(colourOf(city.owner)) : white);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  };
+
+  const plazas = [];
+  const byVariant = new Map(Object.keys(BUILDINGS).map((k) => [k, []]));
+  const ramparts = [];
+  const keeps = [];
+  const SPIRES = ["temple", "great_library", "pyramids", "apex_project"];
+
+  cities.forEach((city, n) => {
+    const [x, y, z] = locate(city.at);
+    plazas.push([city, x, y, z, 0]);
+    for (const spot of cityLayout(city.population, n + city.at)) {
+      byVariant.get(spot.variant).push([city, x + spot.x, y, z + spot.z, spot.yaw]);
+    }
+    if (city.buildings.includes("walls")) ramparts.push([city, x, y, z, 0]);
+    if (city.buildings.some((b) => SPIRES.includes(b))) keeps.push([city, x, y, z, 0]);
+  });
+
+  add(plazaGeometry(), plazas, false);
+  for (const [variant, rows] of byVariant) {
+    if (!rows.length) continue;
+    const { walls, roof } = BUILDINGS[variant]();
+    add(walls, rows, false);
+    add(roof, rows, true);
+  }
+  add(rampartGeometry(), ramparts, false);
+  if (keeps.length) {
+    const keep = keepModel();
+    add(keep.walls, keeps, false);
+    add(keep.roof, keeps, true);
+  }
+  return group;
 }
