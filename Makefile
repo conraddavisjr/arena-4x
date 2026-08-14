@@ -9,7 +9,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine lint fmt clean bots map view view3d stage3d export
+.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map view view3d stage3d export
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -56,6 +56,10 @@ lint:  ## Check formatting and lints
 fmt:  ## Fix what can be fixed automatically
 	$(RUFF) check --fix packages tests scripts
 	$(RUFF) format packages tests scripts
+
+contracts:  ## Live provider contract tests. Spends money; skips without keys
+	@echo "These hit the real vendors. Each is a few cents; run before a flagship run."
+	$(PYTEST) tests/orchestrator/test_contracts.py -m contract -v
 
 clean:  ## Remove caches and build artifacts
 	rm -rf .pytest_cache .ruff_cache .hypothesis build dist

@@ -78,3 +78,9 @@ testpaths = ["tests"]
 # that can drift. Matches the ai-brain setup for the same reason.
 pythonpath = ["packages", "."]
 asyncio_mode = "auto"
+# Contract tests hit the real vendors and cost real money, so they are excluded
+# from the default run and reached through `make contracts`. They still skip
+# themselves when the matching key is absent, so running them is never a
+# surprise charge - it is a deliberate one.
+markers = ["contract: hits a live provider API; requires a key and spends money"]
+addopts = "-m 'not contract'"
