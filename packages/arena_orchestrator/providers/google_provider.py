@@ -1,15 +1,31 @@
 """Google Gemini.
 
-The odd one out. Google's current surface is `client.interactions.create`, with
-the schema under a `response_format` dict that looks superficially like
-OpenAI's and is not: the discriminator is `{"type": "text", "mime_type":
-"application/json", "schema": ...}` rather than a `json_schema` type, the body
-comes back on `output_text`, and there is no `choices` array to unwrap.
+The odd one out, and the one this project got wrong twice.
 
-Worth stating because the plan for this project was written against
-`generate_content` with `response_schema` and `response_mime_type`, and that is
-no longer the call. Anything here that reads like an over-defensive `getattr`
-is guarding the fields this vendor renames most often.
+The design was written against `generate_content` with `response_schema`; that
+is no longer the call. The replacement was then written from a documentation
+summary and was wrong in four separate ways, all of which were caught by
+introspecting the installed SDK rather than by reading about it. Recorded here
+because every one of them would have failed silently or late:
+
+  - The system prompt is `system_instruction`, not `instructions`. Passing the
+    wrong name would have sent the entire rules reference as *nothing* - the
+    SDK takes `**body`, so a misspelled parameter is not an error, it is an
+    omission, and the agent would have played with no rules at all.
+  - `response_format` is a *list* of per-modality formats, and each entry has
+    to be a plain dict using the wire aliases - the SDK's own
+    `TextResponseFormat` object fails to unmarshal, and the schema key is
+    `schema` on the wire even though the Python field is called `jsonSchema`.
+    Sending `jsonSchema` is accepted and silently ignored: the model answers in
+    prose, every turn fails to parse, and every agent passes.
+  - `max_output_tokens` lives inside `generation_config`.
+
+The response side had two more. There is no `finish_reason` and no `candidates`
+array - completion is reported as `status`, and a refusal shows up as a status
+plus an `errors` list. And the usage counter is `total_output_tokens`; the
+`candidates_token_count` name belongs to the old `generate_content` response, so
+reading it would have priced every Gemini turn's output at zero and quietly
+undercounted the budget for a whole match.
 """
 
 from __future__ import annotations
@@ -54,39 +70,51 @@ class GoogleClient:
         try:
             response = await self._client.aio.interactions.create(
                 model=self.model,
-                # The system prompt is the stable prefix here as everywhere; this
-                # vendor caches implicitly on prefix match rather than taking an
-                # explicit breakpoint, so keeping it first is the whole trick.
-                instructions=system,
+                # The stable prefix, as everywhere. This vendor caches
+                # implicitly on prefix match rather than taking an explicit
+                # breakpoint, so keeping it here and keeping it byte-identical
+                # is the whole trick.
+                system_instruction=system,
                 input=user,
-                response_format={
-                    "type": "text",
-                    "mime_type": "application/json",
-                    "schema": schema,
-                },
-                max_output_tokens=self._max_output_tokens,
+                # A *list* of per-modality formats, using **wire** names. Two
+                # traps here, both of which produce a 200 rather than an error:
+                #
+                #   - The SDK's own `TextResponseFormat` fails to unmarshal when
+                #     passed as an object, so this has to be a plain dict.
+                #   - That dict is sent as written, so it needs the serialisation
+                #     aliases rather than the Python field names. The field is
+                #     `jsonSchema`; its alias, and the only spelling the API
+                #     honours, is `schema`. Sending `jsonSchema` is accepted and
+                #     silently ignored - the model then answers in prose, every
+                #     turn fails to parse, and every agent passes.
+                response_format=[{"mime_type": "application/json", "schema": schema}],
+                generation_config={"max_output_tokens": self._max_output_tokens},
             )
         except Exception as error:  # noqa: BLE001 - translated below, never swallowed
             raise _translate(error, self.name) from error
         latency_ms = int((time.monotonic() - started) * 1000)
 
-        finish = _finish_reason(response)
-        if finish in {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"}:
-            raise Refused(f"blocked: {finish}", provider=self.name)
-        if finish == "MAX_TOKENS":
-            raise Malformed("response truncated at max_output_tokens", provider=self.name)
+        status = str(getattr(response, "status", "") or "")
+        if status in {"failed", "cancelled"}:
+            # A refusal arrives as a status plus an errors list rather than as
+            # a distinguished stop reason.
+            errors = "; ".join(
+                str(getattr(e, "message", e)) for e in (getattr(response, "errors", None) or [])
+            )
+            raise Refused(f"{status}: {errors or 'no detail given'}", provider=self.name)
+        if status in {"incomplete", "budget_exceeded"}:
+            raise Malformed(f"response {status}", provider=self.name)
 
         text = getattr(response, "output_text", "") or ""
         if not text:
-            raise Malformed(f"empty response body (finish={finish})", provider=self.name)
+            raise Malformed(f"empty response body (status={status})", provider=self.name)
 
-        raw_usage = getattr(response, "usage_metadata", None) or getattr(response, "usage", None)
         return Turn(
             text=text,
-            usage=_usage(raw_usage),
+            usage=_usage(getattr(response, "usage", None)),
             model=self.model,
             latency_ms=latency_ms,
-            stop_reason=finish,
+            stop_reason=status,
         )
 
     async def aclose(self) -> None:
@@ -95,33 +123,28 @@ class GoogleClient:
             await close()
 
 
-def _finish_reason(response: Any) -> str | None:
-    direct = getattr(response, "finish_reason", None)
-    if direct:
-        return str(direct)
-    for candidate in getattr(response, "candidates", None) or []:
-        if reason := getattr(candidate, "finish_reason", None):
-            return str(reason)
-    return None
-
-
 def _field(raw: Any, name: str) -> int:
     return int(getattr(raw, name, 0) or 0)
 
 
 def _usage(raw: Any) -> Usage:
+    """Read the Interactions usage counters.
+
+    These are `total_*` names on this surface. The `prompt_token_count` /
+    `candidates_token_count` pair belongs to the older `generate_content`
+    response, and reading those here silently returned zero for every field -
+    which prices a whole match at nothing and leaves the budget halt disarmed.
+    """
     if raw is None:
         return Usage()
-    cached = _field(raw, "cached_content_token_count")
-    prompt = _field(raw, "prompt_token_count") or _field(raw, "input_tokens")
+    cached = _field(raw, "total_cached_tokens")
     return Usage(
-        # Like the chat-completions surface, the prompt count includes the
-        # cached portion, which prices at a tenth - so it is split out rather
-        # than counted twice at the full rate.
-        input_tokens=max(0, prompt - cached),
-        output_tokens=_field(raw, "candidates_token_count") or _field(raw, "output_tokens"),
+        # The input count is inclusive of the cached portion, which prices at a
+        # tenth, so it is split out rather than charged at the full rate twice.
+        input_tokens=max(0, _field(raw, "total_input_tokens") - cached),
+        output_tokens=_field(raw, "total_output_tokens"),
         cache_read_tokens=cached,
-        reasoning_tokens=_field(raw, "thoughts_token_count"),
+        reasoning_tokens=_field(raw, "total_thought_tokens"),
     )
 
 

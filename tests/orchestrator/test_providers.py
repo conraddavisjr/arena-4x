@@ -103,7 +103,29 @@ def anthropic_client(monkeypatch: pytest.MonkeyPatch):
                 raise error
             return message
 
-        client._client = Bag(messages=Bag(create=create), close=_noop)
+        # The adapter streams above STREAM_ABOVE_MAX_TOKENS, and the default
+        # max_tokens is now above it - sized so adaptive thinking and the action
+        # payload both fit, since Anthropic caps them together. So the stub has
+        # to offer both surfaces or it tests a path production never takes.
+        class Stream:
+            def __init__(self, **request):
+                self._request = request
+
+            async def __aenter__(self):
+                client.last_request = self._request
+                if error is not None:
+                    raise error
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get_final_message(self):
+                return message
+
+        client._client = Bag(
+            messages=Bag(create=create, stream=lambda **kw: Stream(**kw)), close=_noop
+        )
         return client
 
     return respond
@@ -336,13 +358,17 @@ async def test_xai_truncation_is_malformed(monkeypatch: pytest.MonkeyPatch) -> N
 # ---------------------------------------------------------------------------
 
 
-async def test_google_reads_the_interactions_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+def _fake_genai() -> types.ModuleType:
     genai = types.ModuleType("google.genai")
     genai.Client = lambda **kwargs: Bag(aio=None)
     package = types.ModuleType("google")
     package.genai = genai
-    monkeypatch.setitem(sys.modules, "google", package)
-    monkeypatch.setitem(sys.modules, "google.genai", genai)
+    return package
+
+
+async def test_google_reads_the_interactions_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "google", _fake_genai())
+    monkeypatch.setitem(sys.modules, "google.genai", sys.modules["google"].genai)
     from arena_orchestrator.providers.google_provider import GoogleClient
 
     client = GoogleClient(api_key="x")
@@ -352,42 +378,75 @@ async def test_google_reads_the_interactions_surface(monkeypatch: pytest.MonkeyP
         seen.update(request)
         return Bag(
             output_text='{"orders": []}',
-            finish_reason="STOP",
-            usage_metadata=Bag(
-                prompt_token_count=6000,
-                candidates_token_count=1500,
-                cached_content_token_count=4000,
-                thoughts_token_count=700,
+            status="completed",
+            usage=Bag(
+                total_input_tokens=6000,
+                total_output_tokens=1500,
+                total_cached_tokens=4000,
+                total_thought_tokens=700,
             ),
         )
 
     client._client = Bag(aio=Bag(interactions=Bag(create=create)))
     turn = await client.complete("system", "user", SCHEMA)
 
-    # Not a `json_schema` type, and not generate_content's response_schema.
-    assert seen["response_format"]["mime_type"] == "application/json"
-    assert seen["response_format"]["schema"] is SCHEMA
+    # `system_instruction`, not `instructions`. This SDK takes **body, so a
+    # misspelled parameter is not an error - it is an omission, and the agent
+    # would have played the whole match with no rules reference at all.
+    assert seen["system_instruction"] == "system"
+    assert "instructions" not in seen
+    # A list of per-modality formats, keyed by *wire alias*. `jsonSchema` is the
+    # Python field name and is silently ignored on the wire - the model then
+    # answers in prose and every turn fails to parse.
+    assert seen["response_format"] == [{"mime_type": "application/json", "schema": SCHEMA}]
+    # Not a top-level parameter on this surface.
+    assert seen["generation_config"]["max_output_tokens"] > 0
+    assert "max_output_tokens" not in seen
+
     assert turn.usage.input_tokens == 2000
+    assert turn.usage.output_tokens == 1500
     assert turn.usage.cache_read_tokens == 4000
     assert turn.usage.reasoning_tokens == 700
 
 
-async def test_google_safety_block_is_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
-    genai = types.ModuleType("google.genai")
-    genai.Client = lambda **kwargs: Bag(aio=None)
-    package = types.ModuleType("google")
-    package.genai = genai
-    monkeypatch.setitem(sys.modules, "google", package)
-    monkeypatch.setitem(sys.modules, "google.genai", genai)
+async def test_google_usage_uses_the_interactions_counter_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`candidates_token_count` belongs to the older generate_content response.
+    Reading it here returned zero for every field, which prices a match at
+    nothing and leaves the budget halt disarmed for a whole run."""
+    monkeypatch.setitem(sys.modules, "google", _fake_genai())
+    monkeypatch.setitem(sys.modules, "google.genai", sys.modules["google"].genai)
     from arena_orchestrator.providers.google_provider import GoogleClient
 
     client = GoogleClient(api_key="x")
 
     async def create(**request):
-        return Bag(output_text="", candidates=[Bag(finish_reason="SAFETY")])
+        return Bag(
+            output_text="{}",
+            status="completed",
+            usage=Bag(prompt_token_count=6000, candidates_token_count=1500),
+        )
 
     client._client = Bag(aio=Bag(interactions=Bag(create=create)))
-    with pytest.raises(Refused):
+    turn = await client.complete("system", "user", SCHEMA)
+    assert turn.usage.output_tokens == 0  # the old names carry nothing
+
+
+async def test_google_failure_status_is_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """There is no finish_reason and no candidates array on this surface -
+    a refusal is a status plus an errors list."""
+    monkeypatch.setitem(sys.modules, "google", _fake_genai())
+    monkeypatch.setitem(sys.modules, "google.genai", sys.modules["google"].genai)
+    from arena_orchestrator.providers.google_provider import GoogleClient
+
+    client = GoogleClient(api_key="x")
+
+    async def create(**request):
+        return Bag(output_text="", status="failed", errors=[Bag(message="blocked by safety")])
+
+    client._client = Bag(aio=Bag(interactions=Bag(create=create)))
+    with pytest.raises(Refused, match="blocked by safety"):
         await client.complete("system", "user", SCHEMA)
 
 

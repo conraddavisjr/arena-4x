@@ -16,6 +16,7 @@ they explain shapes that would otherwise look odd:
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -193,3 +194,116 @@ def pass_turn() -> Action:
     return Action(
         reasoning=Reasoning(plan_this_turn="No action taken."),
     )
+
+
+# ---------------------------------------------------------------------------
+# Parsing
+# ---------------------------------------------------------------------------
+
+# Which fields belong to each branch of the two discriminated unions, keyed by
+# the `action` value that selects it. Derived from the models so a new order
+# type cannot be forgotten here.
+_BRANCH_FIELDS: dict[str, set[str]] = {
+    branch.model_fields["action"].annotation.__args__[0]: set(branch.model_fields)
+    for union in (
+        (SendMessage, Propose, RespondToProposal, DeclareWar),
+        (
+            MoveUnit,
+            Attack,
+            Fortify,
+            FoundCity,
+            BuildImprovement,
+            SetProduction,
+            SetResearch,
+            SetRates,
+        ),
+    )
+    for branch in union
+}
+
+
+# What each branch cannot do without. A `send_message` with no text is not a
+# message, and there is nothing to repair it into.
+_BRANCH_REQUIRED: dict[str, set[str]] = {
+    branch.model_fields["action"].annotation.__args__[0]: {
+        name for name, f in branch.model_fields.items() if f.is_required() and name != "action"
+    }
+    for union in (
+        (SendMessage, Propose, RespondToProposal, DeclareWar),
+        (
+            MoveUnit,
+            Attack,
+            Fortify,
+            FoundCity,
+            BuildImprovement,
+            SetProduction,
+            SetResearch,
+            SetRates,
+        ),
+    )
+    for branch in union
+}
+
+
+def _trim(item: object) -> object:
+    """Keep only the fields that belong to the action this item declares.
+
+    Needed because the schema Anthropic accepts is a *flattened* union - every
+    branch's fields merged into one object - so a model choosing `fortify` is
+    looking at a shape that also advertises `tech` and `tax_pct`, and will
+    sometimes fill them in. Those fields are not wrong, they are irrelevant, and
+    the strict models reject them with `extra inputs are not permitted`.
+
+    Nulls go too. Some vendors emit the absent fields explicitly rather than
+    omitting them, and `{"tech": null}` on a fortify order is the same
+    irrelevance wearing a different hat.
+
+    This drops noise, never meaning: a field that genuinely belongs to the
+    declared action is always kept, so a real mistake - a missing `unit_id`,
+    an invented action - still fails validation and still reaches the repair
+    loop. See `arena_orchestrator.dialects` for why the schema is flattened.
+    """
+    if not isinstance(item, dict):
+        return item
+    allowed = _BRANCH_FIELDS.get(item.get("action"))
+    if allowed is None:
+        return item  # unknown action: let the union raise, with its own message
+    return {k: v for k, v in item.items() if k in allowed and v is not None}
+
+
+def parse(raw: str | bytes) -> Action:
+    """Validate a model's response body into an `Action`.
+
+    Use this rather than `Action.model_validate_json` anywhere a real provider
+    is on the other end.
+    """
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected a JSON object, got {type(payload).__name__}")
+    for key in ("orders", "diplomacy"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            payload[key] = [t for t in (_trim(i) for i in value) if _usable(t)]
+    return Action.model_validate(payload)
+
+
+def _usable(item: object) -> bool:
+    """Drop an entry that is missing something its action cannot do without.
+
+    The same trade the engine already makes with illegal orders: discard the bad
+    one, keep the rest of the turn. A flattened schema only requires `action`,
+    so a model can legally answer `{"action": "send_message"}` - which is not a
+    message, and which there is nothing to repair it into. Failing the whole
+    payload over it would throw away the orders alongside, and those are the
+    part that moves the game.
+
+    An invented action goes the same way. Models reach for plausible names that
+    are not in the enum - `research` for `set_research`, `set_taxes` for
+    `set_rates` - and not every vendor's structured output enforces an enum
+    strictly enough to stop them. Keeping one so the union could raise a nicer
+    message cost the entire turn, including the orders that were fine.
+    """
+    if not isinstance(item, dict):
+        return True
+    required = _BRANCH_REQUIRED.get(item.get("action"))
+    return required is not None and required <= set(item)

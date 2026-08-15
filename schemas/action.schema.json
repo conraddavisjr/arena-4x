@@ -539,16 +539,7 @@
   "properties": {
     "diplomacy": {
       "items": {
-        "discriminator": {
-          "mapping": {
-            "declare_war": "#/$defs/DeclareWar",
-            "propose": "#/$defs/Propose",
-            "respond_to_proposal": "#/$defs/RespondToProposal",
-            "send_message": "#/$defs/SendMessage"
-          },
-          "propertyName": "action"
-        },
-        "oneOf": [
+        "anyOf": [
           {
             "$ref": "#/$defs/SendMessage"
           },
@@ -571,20 +562,7 @@
     },
     "orders": {
       "items": {
-        "discriminator": {
-          "mapping": {
-            "attack": "#/$defs/Attack",
-            "build_improvement": "#/$defs/BuildImprovement",
-            "fortify": "#/$defs/Fortify",
-            "found_city": "#/$defs/FoundCity",
-            "move_unit": "#/$defs/MoveUnit",
-            "set_production": "#/$defs/SetProduction",
-            "set_rates": "#/$defs/SetRates",
-            "set_research": "#/$defs/SetResearch"
-          },
-          "propertyName": "action"
-        },
-        "oneOf": [
+        "anyOf": [
           {
             "$ref": "#/$defs/MoveUnit"
           },

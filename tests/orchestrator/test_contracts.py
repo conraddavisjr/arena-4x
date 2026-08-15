@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
+from arena_engine.actions import parse
+from arena_orchestrator.dialects import for_provider
 from arena_orchestrator.providers import build
 
 # Deliberately trivial and provider-neutral: the point is the request shape, not
@@ -54,10 +57,25 @@ KEYS = {
     "xai": "XAI_API_KEY",
 }
 
+SDKS = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "xai": "openai",
+    "google": "google.genai",
+}
+
 
 def requires(provider: str) -> None:
+    """Skip with the *specific* reason, not a generic one.
+
+    Two different things stop these running - no key, and no SDK - and an
+    engine-only checkout has neither. A skip that said only "not set" sent you
+    hunting for a key you already had while the real problem was that
+    `make setup-engine` does not install the vendor SDKs.
+    """
+    pytest.importorskip(SDKS[provider], reason=f"{SDKS[provider]} not installed; run `make setup`")
     if not os.environ.get(KEYS[provider]):
-        pytest.skip(f"{KEYS[provider]} not set")
+        pytest.skip(f"{KEYS[provider]} not set (export it, or put it in .env)")
 
 
 @pytest.mark.contract
@@ -77,6 +95,41 @@ async def test_the_vendor_still_accepts_our_request_shape(provider: str) -> None
     # leave the budget meter stuck at zero for a whole match.
     assert turn.usage.output_tokens > 0
     assert turn.latency_ms > 0
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("provider", sorted(KEYS))
+async def test_the_real_action_schema_is_accepted(provider: str) -> None:
+    """The probe above uses a toy schema, which proves the *call* works and
+    almost nothing about whether a match will.
+
+    The real action schema is two orders of magnitude larger, deeply nested,
+    and authored to Anthropic's dialect - no numeric bounds, no string lengths,
+    `additionalProperties: false` on every object - precisely so the same bytes
+    are accepted by all four vendors. Whether that actually holds is the single
+    assumption a flagship run rests on, and finding out on turn one of an
+    unattended multi-day match is the wrong time.
+    """
+    requires(provider)
+    base = json.loads(
+        (Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json").read_text()
+    )
+    # Through the dialect, exactly as the loop sends it. Testing the base schema
+    # here would be testing something no match ever transmits.
+    schema = for_provider(base, provider)
+    client = build(provider)
+    try:
+        turn = await client.complete(
+            "You are the sovereign of a small civilisation. It is turn 1.",
+            "You have one settler at 0,0 and 40 gold. Found your capital and "
+            "state your opening plan. Return only the action object.",
+            schema,
+        )
+    finally:
+        await client.aclose()
+
+    action = parse(turn.text)
+    assert action.reasoning.plan_this_turn, "no plan came back"
 
 
 @pytest.mark.contract

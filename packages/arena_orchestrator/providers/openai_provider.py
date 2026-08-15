@@ -25,6 +25,7 @@ is why that block is required rather than optional.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -54,7 +55,13 @@ class OpenAIClient:
         model: str = "gpt-5.6",
         *,
         api_key: str | None = None,
-        max_output_tokens: int = 8_000,
+        # Reasoning tokens are billed against this cap, not on top of it, so a
+        # budget sized for the action payload alone is consumed entirely by
+        # thinking and the response comes back incomplete with nothing in it.
+        # Measured: gpt-5.4-mini at effort=high spent all 8k on reasoning for
+        # every turn of a shakeout. Sized for thinking plus the payload; unused
+        # headroom costs nothing, since billing is on tokens produced.
+        max_output_tokens: int = 32_000,
         reasoning_effort: str | None = "high",
         timeout: float = 180.0,
     ):
@@ -95,12 +102,21 @@ class OpenAIClient:
         if refusal:
             raise Refused(refusal, provider=self.name)
 
+        # Status before content, always. An incomplete response has empty text,
+        # so checking text first reports "empty response body" - which is true,
+        # useless, and sent me looking at the schema when the actual cause was
+        # reasoning tokens eating the whole output budget.
+        if getattr(response, "status", None) == "incomplete":
+            reason = getattr(getattr(response, "incomplete_details", None), "reason", "unknown")
+            spent = getattr(getattr(response, "usage", None), "output_tokens", 0)
+            raise Malformed(
+                f"response incomplete: {reason} (output_tokens={spent}, "
+                f"cap={self._max_output_tokens}); reasoning is billed against this cap",
+                provider=self.name,
+            )
         text = getattr(response, "output_text", "") or ""
         if not text:
             raise Malformed("empty response body", provider=self.name)
-        if getattr(response, "status", None) == "incomplete":
-            reason = getattr(getattr(response, "incomplete_details", None), "reason", "unknown")
-            raise Malformed(f"response incomplete: {reason}", provider=self.name)
 
         return Turn(
             text=text,
@@ -121,7 +137,7 @@ class XAIClient:
 
     def __init__(
         self,
-        model: str = "grok-4",
+        model: str = "grok-4.6",
         *,
         api_key: str | None = None,
         base_url: str = XAI_BASE_URL,
@@ -131,7 +147,16 @@ class XAIClient:
         import openai
 
         self._sdk = openai
-        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        # The key has to be resolved here rather than left to the SDK. Riding
+        # OpenAI's client means its fallback is `OPENAI_API_KEY`, so an unset
+        # key sends the *OpenAI* credential to api.x.ai - which xAI answers,
+        # entirely correctly, with "Incorrect API key provided". That message
+        # sent me looking at billing and model ids for an hour.
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key or os.environ.get("XAI_API_KEY", ""),
+            base_url=base_url,
+            timeout=timeout,
+        )
         self.model = model
         self._max_tokens = max_tokens
 

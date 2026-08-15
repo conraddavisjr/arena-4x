@@ -21,6 +21,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages"))
 
+# Same .env loading the test suite does, so `make run --roster shakeout` does
+# not fail for a key that is sitting in the file right next to it.
+_ENV = Path(__file__).resolve().parents[1] / ".env"
+if _ENV.exists():
+    for _line in _ENV.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip().strip("\"'"))
+
 from arena_engine import victory  # noqa: E402
 from arena_engine.types import MatchConfig  # noqa: E402
 from arena_orchestrator.config import RunConfig, Seat  # noqa: E402
@@ -29,24 +39,52 @@ from arena_orchestrator.loop import Orchestrator  # noqa: E402
 
 CIVS = ["Aurelian Compact", "Iron Concord", "Verdant Pact", "Solari Dominion"]
 
-ROSTERS = {
-    # Free. Bot heuristics behind the provider seam; no key, no network.
-    "dry": [("bot", None)] * 4,
+PROVIDERS = ("anthropic", "openai", "google", "xai")
+
+# Which model plays each seat, overridable per roster from the environment.
+#
+# Model ids move faster than anything else in this project - `gemini-3.6-pro`,
+# `grok-4` and `gpt-5.6-mini` were all in here and none of them exists - so they
+# are configuration rather than code. Set `ARENA_FLAGSHIP_GOOGLE` in .env and
+# the flagship roster uses it; leave it unset and the default below applies.
+DEFAULT_MODELS = {
     # A full match for a few dollars, to shake out the loop before spending
     # real money. Caches are model-scoped, so this shares none with flagship.
-    "shakeout": [
-        ("anthropic", "claude-haiku-4-5"),
-        ("openai", "gpt-5.6-mini"),
-        ("google", "gemini-3.6-flash"),
-        ("xai", "grok-4-fast"),
-    ],
-    "flagship": [
-        ("anthropic", "claude-opus-5"),
-        ("openai", "gpt-5.6"),
-        ("google", "gemini-3.6-pro"),
-        ("xai", "grok-4"),
-    ],
+    "shakeout": {
+        "anthropic": "claude-haiku-4-5",
+        "openai": "gpt-5.4-mini",
+        "google": "gemini-3.6-flash",
+        "xai": "grok-4.3",
+    },
+    "flagship": {
+        "anthropic": "claude-opus-5",
+        "openai": "gpt-5.6",
+        # No Gemini pro exists above 3.1, and that one is still a preview.
+        # `gemini-3.7-flash` is newer and GA if you would rather trade tier for
+        # recency; both pass the contract test.
+        "google": "gemini-3.1-pro-preview",
+        "xai": "grok-4.6",
+    },
 }
+
+
+def env_var(roster: str, provider: str) -> str:
+    return f"ARENA_{roster.upper()}_{provider.upper()}"
+
+
+def roster_for(name: str) -> list[tuple[str, str | None]]:
+    """The (provider, model) pairs for a roster, environment first."""
+    if name == "dry":
+        # Free. Bot heuristics behind the provider seam; no key, no network.
+        return [("bot", None)] * 4
+    defaults = DEFAULT_MODELS[name]
+    return [
+        (provider, os.environ.get(env_var(name, provider)) or defaults[provider])
+        for provider in PROVIDERS
+    ]
+
+
+ROSTERS = ("dry", "shakeout", "flagship")
 
 KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -59,7 +97,7 @@ KEYS = {
 def build_config(args: argparse.Namespace) -> RunConfig:
     seats = tuple(
         Seat(player_id=f"p{i + 1}", civ_name=CIVS[i], provider=provider, model=model)
-        for i, (provider, model) in enumerate(ROSTERS[args.roster])
+        for i, (provider, model) in enumerate(roster_for(args.roster))
     )
     # The throttle exists to protect a vendor account. A dry run has no vendor,
     # so leaving it at the default made a 300-turn match spend eight minutes
@@ -78,7 +116,7 @@ def build_config(args: argparse.Namespace) -> RunConfig:
 
 def check_keys(roster: str) -> None:
     missing = sorted(
-        {KEYS[p] for p, _ in ROSTERS[roster] if p in KEYS and not os.environ.get(KEYS[p])}
+        {KEYS[p] for p, _ in roster_for(roster) if p in KEYS and not os.environ.get(KEYS[p])}
     )
     if missing:
         raise SystemExit(f"missing API keys: {', '.join(missing)}")
@@ -86,7 +124,7 @@ def check_keys(roster: str) -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--roster", choices=sorted(ROSTERS), default="dry")
+    parser.add_argument("--roster", choices=ROSTERS, default="dry")
     parser.add_argument("--seed", type=int, default=4)
     parser.add_argument("--turns", type=int, default=300)
     parser.add_argument(
