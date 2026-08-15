@@ -103,7 +103,29 @@ def anthropic_client(monkeypatch: pytest.MonkeyPatch):
                 raise error
             return message
 
-        client._client = Bag(messages=Bag(create=create), close=_noop)
+        # The adapter streams above STREAM_ABOVE_MAX_TOKENS, and the default
+        # max_tokens is now above it - sized so adaptive thinking and the action
+        # payload both fit, since Anthropic caps them together. So the stub has
+        # to offer both surfaces or it tests a path production never takes.
+        class Stream:
+            def __init__(self, **request):
+                self._request = request
+
+            async def __aenter__(self):
+                client.last_request = self._request
+                if error is not None:
+                    raise error
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get_final_message(self):
+                return message
+
+        client._client = Bag(
+            messages=Bag(create=create, stream=lambda **kw: Stream(**kw)), close=_noop
+        )
         return client
 
     return respond

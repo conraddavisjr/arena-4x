@@ -29,7 +29,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from arena_engine import rules
-from arena_engine.actions import Action, pass_turn
+from arena_engine.actions import Action, parse, pass_turn
 
 from .providers.base import LLMClient, ProviderError, Turn
 from .resilience import CircuitBreaker, RetryPolicy, Sleeper, TokenBucket, with_retry
@@ -70,6 +70,10 @@ class Agent:
     # it a test that proves a dead provider does not sink the match has to sit
     # through the real backoff ladder, which is forty seconds a case.
     sleep: Sleeper = asyncio.sleep
+    # The action schema in the dialect this seat's vendor accepts. Held per
+    # agent rather than passed per turn because it never changes and, on
+    # Anthropic, it is not the same bytes the other seats are sent.
+    schema: dict[str, Any] = field(default_factory=dict)
     _history: deque[str] = field(default_factory=lambda: deque(maxlen=3))
 
     def __post_init__(self) -> None:
@@ -81,16 +85,16 @@ class Agent:
         # message instead.
         self.system = rules.system_prompt(self.civ_name, self.player_id)
 
-    async def take_turn(self, observation_json: str, schema: dict[str, Any]) -> Outcome:
+    async def take_turn(self, observation_json: str) -> Outcome:
         user = self._user_message(observation_json)
         try:
-            return await asyncio.wait_for(self._attempt(user, schema), timeout=self.timeout_s)
+            return await asyncio.wait_for(self._attempt(user), timeout=self.timeout_s)
         except TimeoutError:
             return Outcome(action=pass_turn(), failure=f"timeout after {self.timeout_s:.0f}s")
         except ProviderError as error:
             return Outcome(action=pass_turn(), failure=f"{type(error).__name__}: {error}")
 
-    async def _attempt(self, user: str, schema: dict[str, Any]) -> Outcome:
+    async def _attempt(self, user: str) -> Outcome:
         turns: list[Turn] = []
         prompt = user
         last_error = ""
@@ -100,7 +104,7 @@ class Agent:
             await self.bucket.acquire(_estimate_tokens(self.system, prompt))
             turn = await self.breaker.call(
                 lambda p=prompt: with_retry(
-                    lambda: self.client.complete(self.system, p, schema),
+                    lambda: self.client.complete(self.system, p, self.schema),
                     policy=self.retry,
                     sleep=self.sleep,
                 ),
@@ -108,7 +112,11 @@ class Agent:
             )
             turns.append(turn)
             try:
-                action = Action.model_validate_json(turn.text)
+                # `actions.parse`, not `model_validate_json`: the schema some
+                # vendors get is a flattened union, so a body can arrive
+                # carrying fields that belong to a different order type. Those
+                # are trimmed; anything genuinely wrong still raises here.
+                action = parse(turn.text)
             except (ValidationError, json.JSONDecodeError, ValueError) as error:
                 last_error = str(error)[:800]
                 # The correction goes in the *user* turn. An assistant-turn

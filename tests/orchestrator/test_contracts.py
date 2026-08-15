@@ -26,7 +26,8 @@ from pathlib import Path
 
 import pytest
 
-from arena_engine.actions import Action
+from arena_engine.actions import parse
+from arena_orchestrator.dialects import for_provider
 from arena_orchestrator.providers import build
 
 # Deliberately trivial and provider-neutral: the point is the request shape, not
@@ -110,9 +111,12 @@ async def test_the_real_action_schema_is_accepted(provider: str) -> None:
     unattended multi-day match is the wrong time.
     """
     requires(provider)
-    schema = json.loads(
+    base = json.loads(
         (Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json").read_text()
     )
+    # Through the dialect, exactly as the loop sends it. Testing the base schema
+    # here would be testing something no match ever transmits.
+    schema = for_provider(base, provider)
     client = build(provider)
     try:
         turn = await client.complete(
@@ -124,7 +128,7 @@ async def test_the_real_action_schema_is_accepted(provider: str) -> None:
     finally:
         await client.aclose()
 
-    action = Action.model_validate_json(turn.text)
+    action = parse(turn.text)
     assert action.reasoning.plan_this_turn, "no plan came back"
 
 

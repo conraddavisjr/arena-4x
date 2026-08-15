@@ -42,6 +42,7 @@ from . import journal as jl
 from .agent import Agent
 from .budget import Allowance, Ledger
 from .config import RunConfig
+from .dialects import for_provider
 from .journal import Journal
 from .providers import build as build_client
 from .providers.base import LLMClient
@@ -102,6 +103,10 @@ class Orchestrator:
                 player_id=seat.player_id,
                 civ_name=seat.civ_name,
                 client=client,
+                # Anthropic compiles the schema into a grammar and rejects this
+                # one as too large; it gets a flattened variant. Everyone else
+                # takes the base schema unchanged. See dialects.py.
+                schema=for_provider(self.schema, seat.provider),
                 bucket=self._bucket(seat.provider),
                 breaker=self._breaker(seat.provider),
                 timeout_s=self.config.turn_timeout_s,
@@ -201,7 +206,7 @@ class Orchestrator:
         prompts = {pid: self._observation(state, pid) for pid in living}
 
         results = await asyncio.gather(
-            *(self.agents[pid].take_turn(prompts[pid], self.schema) for pid in living)
+            *(self.agents[pid].take_turn(prompts[pid]) for pid in living)
         )
         outcomes = dict(zip(living, results, strict=True))
 

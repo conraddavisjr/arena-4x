@@ -21,6 +21,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages"))
 
+# Same .env loading the test suite does, so `make run --roster shakeout` does
+# not fail for a key that is sitting in the file right next to it.
+_ENV = Path(__file__).resolve().parents[1] / ".env"
+if _ENV.exists():
+    for _line in _ENV.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip().strip("\"'"))
+
 from arena_engine import victory  # noqa: E402
 from arena_engine.types import MatchConfig  # noqa: E402
 from arena_orchestrator.config import RunConfig, Seat  # noqa: E402
@@ -36,9 +46,9 @@ ROSTERS = {
     # real money. Caches are model-scoped, so this shares none with flagship.
     "shakeout": [
         ("anthropic", "claude-haiku-4-5"),
-        ("openai", "gpt-5.6-mini"),
+        ("openai", "gpt-5.4-mini"),
         ("google", "gemini-3.6-flash"),
-        ("xai", "grok-4-fast"),
+        ("xai", "grok-4.3"),
     ],
     "flagship": [
         ("anthropic", "claude-opus-5"),
@@ -47,7 +57,7 @@ ROSTERS = {
         # `gemini-3.7-flash` is newer and GA if you would rather trade tier
         # for recency; both pass the contract test.
         ("google", "gemini-3.1-pro-preview"),
-        ("xai", "grok-4"),
+        ("xai", "grok-4.6"),
     ],
 }
 

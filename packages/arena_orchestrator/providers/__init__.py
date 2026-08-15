@@ -61,7 +61,7 @@ def build(provider: str, model: str | None = None, **options: Any) -> LLMClient:
     if provider == "xai":
         from .openai_provider import XAIClient
 
-        return XAIClient(**_with_model(model, "grok-4"), **options)
+        return XAIClient(**_with_model(model, "grok-4.6"), **options)
     if provider == "google":
         from .google_provider import GoogleClient
 

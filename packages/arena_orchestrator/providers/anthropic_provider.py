@@ -48,6 +48,22 @@ from .base import (
 # the ceiling is cheap to respect.
 STREAM_ABOVE_MAX_TOKENS = 16_000
 
+# Adaptive thinking is a 4.6-and-later feature. Sending it to an older model is
+# a 400, not a graceful downgrade - which is how the shakeout roster lost every
+# turn on `claude-haiku-4-5` while the flagship roster was fine. Listed as
+# families that *do* support it, so an unrecognised model degrades to no
+# thinking rather than to a hard failure.
+ADAPTIVE_THINKING = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
 
 class AnthropicClient:
     name = "anthropic"
@@ -57,7 +73,10 @@ class AnthropicClient:
         model: str = "claude-opus-5",
         *,
         api_key: str | None = None,
-        max_tokens: int = 8_000,
+        # Caps thinking *and* response text together, so this is sized for both.
+        # Above STREAM_ABOVE_MAX_TOKENS the adapter switches to streaming, which
+        # is why that ceiling exists.
+        max_tokens: int = 32_000,
         effort: str = "high",
         thinking_display: str | None = "summarized",
         timeout: float = 180.0,
@@ -71,29 +90,33 @@ class AnthropicClient:
         self._effort = effort
         self._thinking_display = thinking_display
 
-    async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
-        thinking: dict[str, Any] = {"type": "adaptive"}
-        if self._thinking_display:
-            thinking["display"] = self._thinking_display
+    @property
+    def _supports_adaptive(self) -> bool:
+        return self.model.startswith(ADAPTIVE_THINKING)
 
+    async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
+        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
         request: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self._max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],
-            "thinking": thinking,
             # `format` constrains the body to the action schema; `effort` is the
             # reasoning dial. Both live under output_config - the old top-level
             # `output_format` is deprecated API-wide.
-            "output_config": {
-                "format": {"type": "json_schema", "schema": schema},
-                "effort": self._effort,
-            },
+            "output_config": output_config,
             # Caches the last cacheable block, which is the system prompt. The
             # observation goes in the user turn precisely so it stays outside
             # the cached prefix.
             "cache_control": {"type": "ephemeral"},
         }
+        # `effort` travels with adaptive thinking; both are 4.6-and-later.
+        if self._supports_adaptive:
+            thinking: dict[str, Any] = {"type": "adaptive"}
+            if self._thinking_display:
+                thinking["display"] = self._thinking_display
+            request["thinking"] = thinking
+            output_config["effort"] = self._effort
 
         started = time.monotonic()
         try:

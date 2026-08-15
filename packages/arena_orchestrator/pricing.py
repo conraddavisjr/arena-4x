@@ -51,7 +51,8 @@ RATES: dict[str, Rate] = {
     "claude-haiku-4-5": Rate(input=1.00, output=5.00),
     # OpenAI
     "gpt-5.6": Rate(input=1.25, output=10.00),
-    "gpt-5.6-mini": Rate(input=0.25, output=2.00),
+    # `gpt-5.6-mini` does not exist; the newest mini is 5.4.
+    "gpt-5.4-mini": Rate(input=0.25, output=2.00),
     # Google. `gemini-3.6-pro` was in this table and does not exist - the API
     # 404s it and suggests gemini-2.5-pro. There is no 3.6 or 3.7 in the pro
     # tier at all; 3.1 is the newest, and it is still a preview.
@@ -60,8 +61,10 @@ RATES: dict[str, Rate] = {
     "gemini-3.6-flash": Rate(input=0.30, output=2.50),
     "gemini-3.5-flash-lite": Rate(input=0.10, output=0.40),
     # xAI
-    "grok-4": Rate(input=3.00, output=15.00),
-    "grok-4-fast": Rate(input=0.20, output=0.50),
+    # `grok-4` does not exist; the live list is 4.3 / 4.5 / 4.6.
+    "grok-4.6": Rate(input=3.00, output=15.00),
+    "grok-4.5": Rate(input=3.00, output=15.00),
+    "grok-4.3": Rate(input=0.20, output=0.50),
 }
 
 
