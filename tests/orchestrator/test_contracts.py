@@ -54,10 +54,25 @@ KEYS = {
     "xai": "XAI_API_KEY",
 }
 
+SDKS = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "xai": "openai",
+    "google": "google.genai",
+}
+
 
 def requires(provider: str) -> None:
+    """Skip with the *specific* reason, not a generic one.
+
+    Two different things stop these running - no key, and no SDK - and an
+    engine-only checkout has neither. A skip that said only "not set" sent you
+    hunting for a key you already had while the real problem was that
+    `make setup-engine` does not install the vendor SDKs.
+    """
+    pytest.importorskip(SDKS[provider], reason=f"{SDKS[provider]} not installed; run `make setup`")
     if not os.environ.get(KEYS[provider]):
-        pytest.skip(f"{KEYS[provider]} not set")
+        pytest.skip(f"{KEYS[provider]} not set (export it, or put it in .env)")
 
 
 @pytest.mark.contract
