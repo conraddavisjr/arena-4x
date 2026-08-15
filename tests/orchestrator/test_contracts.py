@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
+from arena_engine.actions import Action
 from arena_orchestrator.providers import build
 
 # Deliberately trivial and provider-neutral: the point is the request shape, not
@@ -92,6 +94,38 @@ async def test_the_vendor_still_accepts_our_request_shape(provider: str) -> None
     # leave the budget meter stuck at zero for a whole match.
     assert turn.usage.output_tokens > 0
     assert turn.latency_ms > 0
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("provider", sorted(KEYS))
+async def test_the_real_action_schema_is_accepted(provider: str) -> None:
+    """The probe above uses a toy schema, which proves the *call* works and
+    almost nothing about whether a match will.
+
+    The real action schema is two orders of magnitude larger, deeply nested,
+    and authored to Anthropic's dialect - no numeric bounds, no string lengths,
+    `additionalProperties: false` on every object - precisely so the same bytes
+    are accepted by all four vendors. Whether that actually holds is the single
+    assumption a flagship run rests on, and finding out on turn one of an
+    unattended multi-day match is the wrong time.
+    """
+    requires(provider)
+    schema = json.loads(
+        (Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json").read_text()
+    )
+    client = build(provider)
+    try:
+        turn = await client.complete(
+            "You are the sovereign of a small civilisation. It is turn 1.",
+            "You have one settler at 0,0 and 40 gold. Found your capital and "
+            "state your opening plan. Return only the action object.",
+            schema,
+        )
+    finally:
+        await client.aclose()
+
+    action = Action.model_validate_json(turn.text)
+    assert action.reasoning.plan_this_turn, "no plan came back"
 
 
 @pytest.mark.contract

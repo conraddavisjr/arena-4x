@@ -65,7 +65,9 @@ def build(provider: str, model: str | None = None, **options: Any) -> LLMClient:
     if provider == "google":
         from .google_provider import GoogleClient
 
-        return GoogleClient(**_with_model(model, "gemini-3.6-pro"), **options)
+        # There is no 3.6 or 3.7 in Gemini's pro tier; 3.1 is the newest, and
+        # still a preview. The earlier default here 404'd.
+        return GoogleClient(**_with_model(model, "gemini-3.1-pro-preview"), **options)
     if provider == "scripted":
         from .scripted import ScriptedClient
 

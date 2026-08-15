@@ -43,7 +43,10 @@ ROSTERS = {
     "flagship": [
         ("anthropic", "claude-opus-5"),
         ("openai", "gpt-5.6"),
-        ("google", "gemini-3.6-pro"),
+        # No Gemini pro exists above 3.1, and that one is still a preview.
+        # `gemini-3.7-flash` is newer and GA if you would rather trade tier
+        # for recency; both pass the contract test.
+        ("google", "gemini-3.1-pro-preview"),
         ("xai", "grok-4"),
     ],
 }

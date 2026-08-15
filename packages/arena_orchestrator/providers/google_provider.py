@@ -12,10 +12,12 @@ because every one of them would have failed silently or late:
     wrong name would have sent the entire rules reference as *nothing* - the
     SDK takes `**body`, so a misspelled parameter is not an error, it is an
     omission, and the agent would have played with no rules at all.
-  - `response_format` nests under a modality: `{"text": {...}}`. The schema key
-    inside it is `jsonSchema`, camelCase, unlike every neighbouring field.
-  - `response_mime_type` is a separate top-level parameter and is *required*
-    whenever `response_format` is set.
+  - `response_format` is a *list* of per-modality formats, and each entry has
+    to be a plain dict using the wire aliases - the SDK's own
+    `TextResponseFormat` object fails to unmarshal, and the schema key is
+    `schema` on the wire even though the Python field is called `jsonSchema`.
+    Sending `jsonSchema` is accepted and silently ignored: the model answers in
+    prose, every turn fails to parse, and every agent passes.
   - `max_output_tokens` lives inside `generation_config`.
 
 The response side had two more. There is no `finish_reason` and no `candidates`
@@ -74,8 +76,18 @@ class GoogleClient:
                 # is the whole trick.
                 system_instruction=system,
                 input=user,
-                response_mime_type="application/json",
-                response_format={"text": {"mime_type": "application/json", "jsonSchema": schema}},
+                # A *list* of per-modality formats, using **wire** names. Two
+                # traps here, both of which produce a 200 rather than an error:
+                #
+                #   - The SDK's own `TextResponseFormat` fails to unmarshal when
+                #     passed as an object, so this has to be a plain dict.
+                #   - That dict is sent as written, so it needs the serialisation
+                #     aliases rather than the Python field names. The field is
+                #     `jsonSchema`; its alias, and the only spelling the API
+                #     honours, is `schema`. Sending `jsonSchema` is accepted and
+                #     silently ignored - the model then answers in prose, every
+                #     turn fails to parse, and every agent passes.
+                response_format=[{"mime_type": "application/json", "schema": schema}],
                 generation_config={"max_output_tokens": self._max_output_tokens},
             )
         except Exception as error:  # noqa: BLE001 - translated below, never swallowed

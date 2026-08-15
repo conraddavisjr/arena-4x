@@ -114,18 +114,28 @@ def test_google_request_field_names() -> None:
     from google.genai import interactions
 
     fields = interactions.Interaction.model_fields
-    for name in (
-        "system_instruction",
-        "response_format",
-        "response_mime_type",
-        "generation_config",
-    ):
+    for name in ("system_instruction", "response_format", "generation_config"):
         assert name in fields, f"google request field {name!r} is gone"
-    # Nested under a modality, with a camelCase schema key unlike its neighbours.
-    text_format = genai.types.TextResponseFormat.model_fields
-    assert "jsonSchema" in text_format
-    assert "mime_type" in text_format
     assert "max_output_tokens" in genai.types.GenerationConfig.model_fields
+
+
+def test_google_response_format_uses_its_wire_alias() -> None:
+    """The one this file got wrong, and worth the extra test.
+
+    An earlier version asserted `"jsonSchema" in TextResponseFormat.model_fields`
+    - which is true, and which passed, and which was still the wrong thing to
+    check. We send a plain dict through `**body`, so it goes out with whatever
+    keys we wrote; the *alias* is what the API reads. Sending the Python field
+    name is accepted with a 200 and silently ignored, the model answers in
+    prose, and every turn of the match fails to parse.
+
+    Introspection can only tell you what a name is called locally. Asserting the
+    alias is the closest a free test gets to asserting what goes on the wire.
+    """
+    genai = sdk("google.genai")
+    fields = genai.types.TextResponseFormat.model_fields
+    assert fields["jsonSchema"].alias == "schema"
+    assert fields["mime_type"].alias == "mimeType"
 
 
 def test_google_response_field_names() -> None:

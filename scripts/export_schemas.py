@@ -46,7 +46,16 @@ UNSUPPORTED = {
     "minProperties",
     "maxProperties",
     "default",
+    # Pydantic emits this alongside `oneOf` for a discriminated union. It is an
+    # OpenAPI keyword rather than a JSON Schema one, and it is meaningless once
+    # the union below has been rewritten.
+    "discriminator",
 }
+
+# Keywords that carry meaning and so are renamed rather than dropped. Kept
+# separate from UNSUPPORTED because stripping these would delete the union
+# itself; the dialect test asserts against both sets.
+REWRITES = {"oneOf": "anyOf"}
 
 
 def sanitize(node: Any) -> Any:
@@ -57,6 +66,21 @@ def sanitize(node: Any) -> Any:
         return node
 
     out = {k: sanitize(v) for k, v in node.items() if k not in UNSUPPORTED}
+
+    # Pydantic renders a discriminated union as `oneOf`, and neither Anthropic
+    # nor OpenAI supports it: both reject the request outright with
+    # "'oneOf' is not permitted". `anyOf` is accepted everywhere and means the
+    # same thing here, because the branches are mutually exclusive anyway - each
+    # is discriminated by a different `const` on `action`.
+    #
+    # This is worth the comment because of how it failed. Every mocked test
+    # passed, the schema round-tripped through the parity test, and a full dry
+    # match played 108 turns without complaint - the schema is never sent to a
+    # vendor in any of those. It would have 400'd on turn one of the flagship
+    # run, on three of four seats simultaneously.
+    for old, new in REWRITES.items():
+        if old in out:
+            out[new] = out.pop(old)
 
     if out.get("type") == "object" or "properties" in out:
         out["additionalProperties"] = False

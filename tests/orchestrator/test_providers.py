@@ -373,11 +373,10 @@ async def test_google_reads_the_interactions_surface(monkeypatch: pytest.MonkeyP
     # would have played the whole match with no rules reference at all.
     assert seen["system_instruction"] == "system"
     assert "instructions" not in seen
-    # response_format nests under a modality, and the schema key inside it is
-    # camelCase unlike every field around it.
-    assert seen["response_format"]["text"]["jsonSchema"] is SCHEMA
-    # Required whenever response_format is set.
-    assert seen["response_mime_type"] == "application/json"
+    # A list of per-modality formats, keyed by *wire alias*. `jsonSchema` is the
+    # Python field name and is silently ignored on the wire - the model then
+    # answers in prose and every turn fails to parse.
+    assert seen["response_format"] == [{"mime_type": "application/json", "schema": SCHEMA}]
     # Not a top-level parameter on this surface.
     assert seen["generation_config"]["max_output_tokens"] > 0
     assert "max_output_tokens" not in seen

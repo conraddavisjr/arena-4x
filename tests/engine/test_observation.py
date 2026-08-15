@@ -473,6 +473,16 @@ def _assert_dialect(node, name: str, path: str = "") -> None:
 
 
 def export_schemas_unsupported() -> set[str]:
+    """Everything that must not survive into a published schema.
+
+    Both the keywords that get stripped and the ones that get rewritten. The
+    rewrites matter just as much and are easier to miss: `oneOf` is what Pydantic
+    emits for a discriminated union, and Anthropic and OpenAI both reject it
+    outright. Every mocked test passed with it in place, the parity test passed,
+    and a 108-turn dry match played through without complaint - because none of
+    those ever send the schema to a vendor. It would have 400'd on turn one of
+    the flagship run, on three of four seats at once.
+    """
     import export_schemas
 
-    return export_schemas.UNSUPPORTED
+    return export_schemas.UNSUPPORTED | set(export_schemas.REWRITES)
