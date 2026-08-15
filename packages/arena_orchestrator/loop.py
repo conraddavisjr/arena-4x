@@ -1,0 +1,308 @@
+"""The match loop.
+
+    build four observations -> call four models at once -> resolve one turn
+
+Repeat until somebody wins, the turn cap lands, or the budget runs out.
+
+Three decisions are worth stating, because they are what the loop *is*:
+
+**Turns resolve simultaneously.** Every agent sees the same board and none sees
+another's move before committing to its own, so there is no turn-order
+advantage to control for. It also means the wall clock per turn is the slowest
+model rather than the sum of four, which over 300 turns is the difference
+between a day and most of a week.
+
+**A failed agent passes; it never propagates.** `Agent.take_turn` cannot raise,
+so a provider outage costs one civ its turn and nothing else. The match is the
+thing being protected.
+
+**The budget is checked after resolution, not before.** Checking first would
+abandon a turn that four agents had already been billed for. Checking after
+means the halt lands on a coherent board that can be scored.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from arena_replay import BundleWriter
+
+from arena_engine import observation as obs
+from arena_engine.actions import Action
+from arena_engine.events import Event
+from arena_engine.reducer import new_match, step
+from arena_engine.types import State
+
+from . import journal as jl
+from .agent import Agent
+from .budget import Allowance, Ledger
+from .config import RunConfig
+from .journal import Journal
+from .providers import build as build_client
+from .providers.base import LLMClient
+from .resilience import CircuitBreaker, Sleeper, TokenBucket
+
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json"
+
+
+@dataclass
+class MatchResult:
+    state: State
+    reason: str
+    winner: str | None
+    ledger: Ledger
+    failures: int = 0
+
+
+@dataclass
+class Orchestrator:
+    config: RunConfig
+    root: Path
+    clients: dict[str, LLMClient] | None = None
+    schema: dict[str, Any] = field(default_factory=dict)
+    bundle: bool = True
+    # Fired with the resolved state after every turn, and once before the first.
+    # Progress reporting hangs off this, and so does the dry-run harness, which
+    # needs its bot seats to see the current board rather than turn zero's.
+    after_turn: Callable[[State], None] | None = None
+    # Every wait in the loop - backoff and throttling alike - goes through this.
+    # Overriding it is what lets a test prove that a provider outage costs one
+    # civ its turns without the suite sitting through the real backoff ladder.
+    sleep: Sleeper = asyncio.sleep
+    # What each civ saw happen to it last turn. The engine writes one event
+    # stream for the whole board, so this is the per-agent slice - a civ should
+    # be told its own warrior died, not everybody's.
+    _recent: dict[str, list[str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.schema:
+            self.schema = json.loads(SCHEMA_PATH.read_text())
+        self.ledger = Ledger(cap_usd=self.config.budget_usd)
+        self.allowance = (
+            Allowance(per_agent_tokens=self.config.allowance_tokens)
+            if self.config.agent_budget_awareness == "tokens"
+            else None
+        )
+        # One bucket per *provider*, not per seat: the limit belongs to the
+        # vendor account, so two Anthropic seats in the same match share it. A
+        # bucket each would let the pair burst to twice the configured rate.
+        self._buckets: dict[str, TokenBucket] = {}
+        self._breakers: dict[str, CircuitBreaker] = {}
+        self.agents: dict[str, Agent] = {}
+        for seat in self.config.seats:
+            client = (self.clients or {}).get(seat.player_id) or build_client(
+                seat.provider, seat.model, **seat.options
+            )
+            self.agents[seat.player_id] = Agent(
+                player_id=seat.player_id,
+                civ_name=seat.civ_name,
+                client=client,
+                bucket=self._bucket(seat.provider),
+                breaker=self._breaker(seat.provider),
+                timeout_s=self.config.turn_timeout_s,
+                history_size=self.config.reasoning_history,
+                sleep=self.sleep,
+            )
+
+    def _bucket(self, provider: str) -> TokenBucket:
+        if provider not in self._buckets:
+            self._buckets[provider] = TokenBucket(
+                self.config.requests_per_minute,
+                self.config.tokens_per_minute,
+                sleep=self.sleep,
+            )
+        return self._buckets[provider]
+
+    def _breaker(self, provider: str) -> CircuitBreaker:
+        # Shared per provider for the same reason: "Anthropic is down" is a fact
+        # about Anthropic, and each seat learning it separately would spend four
+        # full retry ladders to reach the same conclusion.
+        if provider not in self._breakers:
+            self._breakers[provider] = CircuitBreaker()
+        return self._breakers[provider]
+
+    # -----------------------------------------------------------------------
+
+    async def run(self, *, resume: bool = False) -> MatchResult:
+        recovered = jl.recover(self.root) if resume else None
+        if recovered and recovered.ended:
+            raise RuntimeError(f"match at {self.root} already ended; nothing to resume")
+
+        journal = Journal.open(self.root, resume=bool(recovered))
+        match_id = (recovered.match_id if recovered else None) or self.config.match_id
+        state, events = new_match(match_id, self.config.seed, self.config.roster, self.config.match)
+        writer = BundleWriter.start(self.root, state) if self.bundle else None
+
+        if recovered:
+            state, writer = self._replay(state, recovered, writer)
+        else:
+            journal.append(
+                jl.MATCH_CREATED,
+                0,
+                match_id=match_id,
+                seed=self.config.seed,
+                seats=[seat.to_json() for seat in self.config.seats],
+                state_hash=state.state_hash(),
+            )
+
+        failures = 0
+        reason = "turn_limit"
+        try:
+            if self.after_turn:
+                self.after_turn(state)
+            while state.victory is None and state.turn < self.config.match.turn_limit:
+                actions, outcomes = await self._collect(state, journal)
+                failures += sum(1 for o in outcomes.values() if o.passed)
+                state, events = step(state, actions)
+                self._remember_events(events)
+                if self.after_turn:
+                    self.after_turn(state)
+
+                journal.append(
+                    jl.TURN_RESOLVED,
+                    state.turn,
+                    actions={p: a.model_dump(mode="json") for p, a in actions.items()},
+                    state_hash=state.state_hash(),
+                )
+                if writer:
+                    writer.add(state, events)
+
+                if self.ledger.exhausted:
+                    reason = "budget_cap"
+                    break
+
+            if state.victory is not None:
+                reason = state.victory.condition
+            winner = state.victory.winner if state.victory else None
+            journal.append(
+                jl.MATCH_ENDED,
+                state.turn,
+                reason=reason,
+                winner=winner,
+                spent_usd=round(self.ledger.spent_usd, 4),
+            )
+            if writer:
+                writer.finish(state, {"winner": winner, "reason": reason})
+            return MatchResult(state, reason, winner, self.ledger, failures)
+        finally:
+            journal.close()
+            await self.aclose()
+
+    async def _collect(
+        self, state: State, journal: Journal
+    ) -> tuple[dict[str, Action], dict[str, Any]]:
+        """Four concurrent calls, resolved together."""
+        living = [pid for pid in state.civ_ids() if state.players[pid].alive]
+        prompts = {pid: self._observation(state, pid) for pid in living}
+
+        results = await asyncio.gather(
+            *(self.agents[pid].take_turn(prompts[pid], self.schema) for pid in living)
+        )
+        outcomes = dict(zip(living, results, strict=True))
+
+        actions: dict[str, Action] = {}
+        for player_id, outcome in outcomes.items():
+            actions[player_id] = outcome.action
+            self._account(state, journal, player_id, outcome, prompts[player_id])
+        return actions, outcomes
+
+    def _account(self, state: State, journal: Journal, player_id: str, outcome, user: str) -> None:
+        agent = self.agents[player_id]
+        for turn in outcome.turns:
+            cost = self.ledger.charge(player_id, turn.model, turn.usage)
+            if self.allowance:
+                self.allowance.charge(player_id, turn.usage)
+            journal.append(
+                jl.AGENT_CALL,
+                state.turn + 1,
+                player_id=player_id,
+                model=turn.model,
+                usage=turn.usage.__dict__ if hasattr(turn.usage, "__dict__") else None,
+                input_tokens=turn.usage.input_tokens,
+                output_tokens=turn.usage.output_tokens,
+                cache_read_tokens=turn.usage.cache_read_tokens,
+                cost_usd=round(cost, 6),
+                latency_ms=turn.latency_ms,
+                stop_reason=turn.stop_reason,
+            )
+            journal.transcript(state.turn + 1, player_id, agent.system, user, turn.text)
+
+        if outcome.repaired:
+            journal.append(jl.PARSE_REPAIRED, state.turn + 1, player_id=player_id)
+        if outcome.failure:
+            # Surfaced on the dashboard rather than buried: an agent that passes
+            # is playing badly for a reason, and a run where one seat quietly
+            # passed forty turns is not a fair comparison.
+            journal.append(
+                jl.AGENT_FAILURE, state.turn + 1, player_id=player_id, reason=outcome.failure
+            )
+
+    def _observation(self, state: State, player_id: str) -> str:
+        budget = None
+        if self.allowance:
+            block = self.allowance.observation_block(
+                player_id, state.turn, self.config.match.turn_limit
+            )
+            budget = obs.BudgetView(**block)
+        return obs.to_json(
+            obs.build(
+                state,
+                player_id,
+                recent_events=self._recent.get(player_id, []),
+                budget=budget,
+            )
+        )
+
+    def _remember_events(self, events: list[Event]) -> None:
+        """Slice the turn's events into what each civ is entitled to know.
+
+        Only events attributed to a civ go to that civ. Engine-level events have
+        no actor and are addressed to nobody, and handing an agent the whole
+        board's event stream would leak the fog of war straight through the one
+        channel that is supposed to respect it.
+        """
+        self._recent = {}
+        for event in events:
+            if event.actor:
+                self._recent.setdefault(event.actor, []).append(event.text)
+
+    # -----------------------------------------------------------------------
+
+    def _replay(self, state: State, recovered, writer):
+        """Rebuild an interrupted match by re-applying its recorded decisions.
+
+        The hash check is the point. A replay that silently diverged - because
+        the engine changed between crash and restart, or a line was truncated -
+        would resume a *different* match while every log said otherwise, and
+        nothing downstream would ever notice.
+        """
+        if recovered.seed is not None and recovered.seed != self.config.seed:
+            raise RuntimeError(
+                f"journal was written with seed {recovered.seed}, "
+                f"but this run is configured for {self.config.seed}"
+            )
+        for record in recovered.turns:
+            actions = {
+                player_id: Action.model_validate(payload)
+                for player_id, payload in record["actions"].items()
+            }
+            state, events = step(state, actions)
+            if state.state_hash() != record["state_hash"]:
+                raise RuntimeError(
+                    f"replay diverged at turn {record['turn']}: the recorded decisions no "
+                    f"longer reproduce the recorded state. Refusing to resume into a match "
+                    f"the log does not describe."
+                )
+            if writer:
+                writer.add(state, events)
+        return state, writer
+
+    async def aclose(self) -> None:
+        await asyncio.gather(
+            *(agent.aclose() for agent in self.agents.values()), return_exceptions=True
+        )
