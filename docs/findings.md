@@ -246,6 +246,62 @@ vendor bias the limit exists to avoid.
 
 ---
 
+## Two things investigated and one of them deliberately not fixed
+
+### The dossier cap did not cap what it claimed to
+
+The design says "capped at roughly 2000 tokens". The implementation capped the
+*number* of lessons and commitments at twelve, which is not a size cap: a model
+writing twelve long ones sails past it. Measured on the first live match, one
+agent's dossier reached 10,536 characters - about 2,600 tokens - while passing
+the count check on every turn. The dossier is re-sent verbatim on every turn, so
+an unbounded one is the easiest way for an agent to quietly triple its own input
+bill.
+
+It is a size budget now, trimmed cheapest-content-first: lessons, then
+commitments. **Doctrine and opponent models are never trimmed** - the doctrine is
+the plan being executed and the opponent models are the record this lab exists to
+read. Mangling an assessment to save tokens would destroy the evidence to protect
+the bill.
+
+Separately: two of the four models wrote **no opponent models at all**, and the
+field carried no description, so its name was the only guidance. All eight
+dossier fields now have descriptions, and the rules reference explains the
+dossier directly.
+
+That created its own problem. Descriptions cost 1,400 bytes of schema, which
+pushed the Anthropic dialect over its ~6KB grammar cap. So the dialect strips
+them - before flattening, not after, because the flattening writes a description
+of its own that is load-bearing - while the other three vendors keep them, and
+the same guidance reaches everyone through the cached rules reference.
+
+### Gemini's zero cache rate is real, expected, and not worth fixing
+
+Implicit caching does not engage below roughly **17k tokens**. Measured: at a
+2.2k-token prefix and a 7.3k-token prefix, zero cached on every call; at 17k, it
+cached 8,174 tokens from the second call onward. Our system prefix is 2,234
+tokens, so it does not qualify.
+
+The Interactions API has no `cached_content` parameter either - only
+`previous_interaction_id`, which chains the whole prior conversation forward and
+is precisely the growing-context design this project rejected.
+
+The arithmetic settles it:
+
+| | per match (300 turns) |
+|---|---|
+| Gemini prefix uncached | $0.20 |
+| If it cached | $0.02 |
+| **Saving available** | **$0.18** |
+| Cost of padding the prefix to qualify | $0.84 |
+
+Padding to reach the threshold costs four times more than not caching at all.
+The amber flag in the cost meter stays, because a zero on a vendor with an
+explicit breakpoint means the 12.5x bug above - but it now carries a tooltip
+saying which case is which.
+
+---
+
 ## What to check first, next time
 
 1. `make contracts` before any unattended spend. Nine tests, a few cents.

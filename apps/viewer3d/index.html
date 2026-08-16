@@ -477,7 +477,12 @@ function panels() {
           <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
             c.model || c.civ_name}</span></td>
           <td>${s.usd.toFixed(3)}</td><td>${(s.output/1000).toFixed(1)}k</td>
-          <td class="${cachePct ? "" : "warn"}">${cachePct}%</td>
+          <td class="${cachePct ? "" : "warn"}" title="${cachePct ? "" :
+            "no cache reads. Worth chasing on a vendor with an explicit breakpoint - " +
+            "a prefix written and never read costs 12.5x. On Gemini it is expected: " +
+            "implicit caching does not engage below roughly 17k tokens and our prefix " +
+            "is 2.2k, where the whole saving would be about 18 cents a match."
+            }">${cachePct}%</td>
           <td>${(s.ms / s.turns / 1000).toFixed(0)}</td><td>${per.toFixed(0)}</td></tr>`;
       }).join("")}</tbody></table>
     <div class="tick" style="margin-top:6px">$${grand.toFixed(3)} through turn ${S.turn}

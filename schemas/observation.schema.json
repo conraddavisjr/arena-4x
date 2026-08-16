@@ -166,10 +166,12 @@
       "description": "The agent's self-authored memory.\n\nThe engine stores this and hands it back verbatim next turn. It never edits\nthe content; the only thing it may do is truncate an oversized one, and it\nemits `dossier_truncated` when it does so the loss is visible in the log\nrather than silent.",
       "properties": {
         "doctrine": {
+          "description": "Your standing strategy in a few sentences - the plan you are executing across turns, not this turn's orders.",
           "title": "Doctrine",
           "type": "string"
         },
         "lessons": {
+          "description": "What you have learned about how this world works, so you do not have to learn it again. Trimmed first if the dossier runs long.",
           "items": {
             "type": "string"
           },
@@ -177,6 +179,7 @@
           "type": "array"
         },
         "opponent_models": {
+          "description": "One entry per rival you have formed a view about. Keep them current: this is how you remember who kept their word.",
           "items": {
             "$ref": "#/$defs/OpponentModel"
           },
@@ -184,6 +187,7 @@
           "type": "array"
         },
         "standing_commitments": {
+          "description": "Promises you have made and intend to honour, with the turn they expire. You may break them; the whole world will be told if you do.",
           "items": {
             "type": "string"
           },
@@ -325,8 +329,10 @@
     },
     "OpponentModel": {
       "additionalProperties": false,
+      "description": "What one civ believes about another.\n\nDescriptions matter here more than anywhere else in the schema. Two of the\nfour models in the first live match wrote no opponent models at all, while\nthe other two maintained one per rival and revised them as evidence\narrived - and the field carried no description, so the only guidance was\nits name. An explicit opponent model is worth far more per token than\ntwenty turns of raw transcript, and it is the field this lab exists to read.",
       "properties": {
         "assessed_intent": {
+          "description": "What you believe this civ is trying to achieve, in a sentence.",
           "title": "Assessed Intent",
           "type": "string"
         },
@@ -339,14 +345,17 @@
               "type": "null"
             }
           ],
+          "description": "The evidence behind the assessment: what they did, and when.",
           "title": "Notes"
         },
         "player_id": {
+          "description": "Which rival this assessment is about.",
           "title": "Player Id",
           "type": "string"
         },
         "trustworthiness": {
-          "$ref": "#/$defs/Trustworthiness"
+          "$ref": "#/$defs/Trustworthiness",
+          "description": "How much their word has been worth so far. Revise it when evidence arrives - a promise kept or broken is exactly what should move this."
         }
       },
       "required": [

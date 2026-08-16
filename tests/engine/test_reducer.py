@@ -464,7 +464,14 @@ def test_dossier_round_trips_verbatim() -> None:
     assert state.players["p1"].dossier == written
 
 
-def test_oversized_dossier_is_truncated_loudly() -> None:
+def test_many_short_lessons_are_not_truncated() -> None:
+    """The cap is on size, not on count.
+
+    It used to be on count - twelve lessons, twelve commitments - which is not a
+    size cap at all. Fifty short lessons cost less than three long ones, and the
+    dossier is re-sent on every turn of the match, so what matters is what it
+    costs to carry rather than how many bullets it has.
+    """
     from arena_engine.types import Dossier
 
     state = fresh()
@@ -472,8 +479,64 @@ def test_oversized_dossier_is_truncated_loudly() -> None:
     actions["p1"] = Action(dossier=Dossier(lessons=[f"lesson {i}" for i in range(50)]))
     state, events = step(state, actions)
 
+    assert not any(e.type == "dossier_truncated" for e in events)
+    assert len(state.players["p1"].dossier.lessons) == 50
+
+
+def test_an_expensive_dossier_is_truncated_loudly() -> None:
+    """The case the count cap missed. Measured on the first live match: one
+    agent reached 10,536 characters, well over the design figure, while passing
+    the count check on every single turn."""
+    from arena_engine.types import Dossier
+
+    state = fresh()
+    actions = passes()
+    actions["p1"] = Action(dossier=Dossier(lessons=["x" * 900 for _ in range(12)]))
+    state, events = step(state, actions)
+
     assert any(e.type == "dossier_truncated" for e in events), "silent truncation hides the loss"
-    assert len(state.players["p1"].dossier.lessons) <= 12
+    stored = state.players["p1"].dossier
+    assert len(stored.model_dump_json()) <= 8_000
+    assert len(stored.lessons) < 12
+
+
+def test_truncation_protects_the_assessments_and_the_plan() -> None:
+    """Lessons are history; opponent models are the record this lab exists to
+    read, and the doctrine is the plan being executed. Trimming an assessment to
+    save tokens would destroy the evidence to protect the bill."""
+    from arena_engine.types import Dossier, OpponentModel, Trustworthiness
+
+    models = [
+        OpponentModel(
+            player_id=pid,
+            assessed_intent="expansionist, will not negotiate" * 20,
+            trustworthiness=Trustworthiness.LOW,
+            notes="broke the turn-31 ceasefire" * 20,
+        )
+        for pid in ("p2", "p3", "p4")
+    ]
+    state = fresh()
+    actions = passes()
+    actions["p1"] = Action(
+        dossier=Dossier(
+            doctrine="hold the river line" * 40,
+            opponent_models=models,
+            standing_commitments=["y" * 400 for _ in range(6)],
+            lessons=["z" * 400 for _ in range(12)],
+        )
+    )
+    state, events = step(state, actions)
+
+    stored = state.players["p1"].dossier
+    assert any(e.type == "dossier_truncated" for e in events)
+    # Every assessment survived, and so did the doctrine.
+    assert len(stored.opponent_models) == 3
+    assert {m.player_id for m in stored.opponent_models} == {"p2", "p3", "p4"}
+    assert stored.doctrine == "hold the river line" * 40
+    # Lessons went before commitments.
+    assert len(stored.lessons) < 12
+    if stored.lessons:
+        assert len(stored.standing_commitments) == 6
 
 
 # ---------------------------------------------------------------------------

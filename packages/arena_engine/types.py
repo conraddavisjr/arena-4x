@@ -202,10 +202,31 @@ class Trustworthiness(StrEnum):
 
 
 class OpponentModel(Model):
-    player_id: str
-    assessed_intent: str
-    trustworthiness: Trustworthiness = Trustworthiness.UNKNOWN
-    notes: str | None = None
+    """What one civ believes about another.
+
+    Descriptions matter here more than anywhere else in the schema. Two of the
+    four models in the first live match wrote no opponent models at all, while
+    the other two maintained one per rival and revised them as evidence
+    arrived - and the field carried no description, so the only guidance was
+    its name. An explicit opponent model is worth far more per token than
+    twenty turns of raw transcript, and it is the field this lab exists to read.
+    """
+
+    player_id: str = Field(description="Which rival this assessment is about.")
+    assessed_intent: str = Field(
+        description="What you believe this civ is trying to achieve, in a sentence."
+    )
+    trustworthiness: Trustworthiness = Field(
+        default=Trustworthiness.UNKNOWN,
+        description=(
+            "How much their word has been worth so far. Revise it when evidence "
+            "arrives - a promise kept or broken is exactly what should move this."
+        ),
+    )
+    notes: str | None = Field(
+        default=None,
+        description="The evidence behind the assessment: what they did, and when.",
+    )
 
 
 class Dossier(Model):
@@ -217,10 +238,34 @@ class Dossier(Model):
     rather than silent.
     """
 
-    doctrine: str = ""
-    opponent_models: list[OpponentModel] = Field(default_factory=list)
-    standing_commitments: list[str] = Field(default_factory=list)
-    lessons: list[str] = Field(default_factory=list)
+    doctrine: str = Field(
+        default="",
+        description=(
+            "Your standing strategy in a few sentences - the plan you are "
+            "executing across turns, not this turn's orders."
+        ),
+    )
+    opponent_models: list[OpponentModel] = Field(
+        default_factory=list,
+        description=(
+            "One entry per rival you have formed a view about. Keep them "
+            "current: this is how you remember who kept their word."
+        ),
+    )
+    standing_commitments: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Promises you have made and intend to honour, with the turn they "
+            "expire. You may break them; the whole world will be told if you do."
+        ),
+    )
+    lessons: list[str] = Field(
+        default_factory=list,
+        description=(
+            "What you have learned about how this world works, so you do not "
+            "have to learn it again. Trimmed first if the dossier runs long."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

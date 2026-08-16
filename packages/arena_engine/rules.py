@@ -266,6 +266,27 @@ Wolves hunt lone or civilian units. Raiders march on cities and will sack an
 undefended one, reducing its population, or burn a size-1 city outright. They
 never occupy a city. Wildlife thins out as land is claimed.
 
+## Your dossier
+
+You write it, the engine stores it untouched, and it comes back to you verbatim
+next turn. It is the only thing you carry forward apart from the board itself,
+so anything you will want in twenty turns has to be in here.
+
+- `doctrine` - the strategy you are executing across turns, not this turn's
+  orders.
+- `opponent_models` - one per rival you have formed a view about. Record what
+  you think they are doing and how much their word has been worth, and revise
+  it when evidence arrives. A promise kept or broken is exactly what should move
+  `trustworthiness`. This is the most valuable thing in the dossier: an explicit
+  read on a rival is worth far more than a transcript of what they said.
+- `standing_commitments` - promises you have made, with the turn they expire.
+  You may break them. Everyone will be told if you do.
+- `lessons` - what you have learned about how this world works.
+
+Keep it under about two thousand tokens. If it runs over, the engine trims
+lessons first and then commitments; your doctrine and your opponent models are
+never trimmed, because they are the expensive ones to rebuild.
+
 ## Terrain
 
 {_terrain_section()}
