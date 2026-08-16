@@ -22,9 +22,15 @@
   body{margin:0;background:var(--bg);color:var(--ink);
     font:13px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
     display:grid;grid-template-columns:minmax(0,1fr) 360px;height:100vh;overflow:hidden}
-  main{position:relative;display:flex;flex-direction:column;min-width:0}
+  main{position:relative;display:flex;flex-direction:column;min-width:0;
+    height:100vh;overflow:hidden}
   aside{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto}
-  #stage{flex:1;min-height:0;position:relative}
+  /* min-height:0 is what actually pins the scrubber. Without it a flex child
+     refuses to shrink below its content, the stage grows past the viewport and
+     pushes the scrubber off the bottom of the screen - which is exactly how it
+     went missing. flex-shrink:0 on the bar then stops it being squeezed away on
+     a short window. */
+  #stage{flex:1;min-height:0;position:relative;overflow:hidden}
   canvas{display:block;width:100%;height:100%}
 
   header{position:absolute;top:0;left:0;right:0;z-index:2;display:flex;gap:10px;align-items:center;
@@ -35,13 +41,25 @@
   button:hover{background:#28313d}
   button[aria-pressed="true"]{background:#2f6feb;border-color:#2f6feb}
   .scrub{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--line);
-    background:var(--panel)}
+    background:var(--panel);flex:0 0 auto;z-index:3}
   input[type=range]{flex:1;accent-color:#2f6feb}
   .turn{font-variant-numeric:tabular-nums;min-width:96px;color:var(--dim)}
   .hint{position:absolute;bottom:8px;left:14px;color:var(--faint);font-size:11px;z-index:2}
 
-  section{border-bottom:1px solid var(--line);padding:12px 14px}
-  h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 8px;font-weight:600}
+  details{border-bottom:1px solid var(--line)}
+  details > div{padding:0 14px 12px}
+  summary{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+    font-weight:600;padding:10px 14px;cursor:pointer;user-select:none;
+    display:flex;align-items:center;gap:8px;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸";font-size:11px;color:var(--dim);width:9px}
+  details[open] > summary::before{content:"▾"}
+  summary:hover{color:var(--ink)}
+  /* The count on a closed section. Empty ones stay quiet rather than showing a
+     zero, so the eye only goes to sections with something to say. */
+  summary i{font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums;
+    margin-left:auto;font-size:11px}
+  summary i.hot{color:#4ade80}
   table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
   th,td{text-align:right;padding:3px 4px}
   th:first-child,td:first-child{text-align:left}
@@ -120,12 +138,19 @@
 </main>
 
 <aside>
-  <section><h2>Empires</h2><div id="economy"></div></section>
-  <section><h2>Cost</h2><div id="cost"></div></section>
-  <section><h2>Reasoning</h2><div id="reasoning"></div></section>
-  <section><h2>Dossier</h2><div id="dossier"></div></section>
-  <section><h2>Diplomacy</h2><div id="messages"></div></section>
-  <section><h2>Events</h2><div id="events"></div></section>
+  <!--
+    Native <details> rather than a JS accordion: the open/closed state survives
+    every re-render for free, because panels() rewrites the inner div and never
+    touches the wrapper. Each summary carries a count, so a collapsed section
+    still tells you whether there is anything in it - a panel you have to open
+    to discover is empty is worse than one always open.
+  -->
+  <details open><summary>Empires<i id="n-economy"></i></summary><div id="economy"></div></details>
+  <details><summary>Cost<i id="n-cost"></i></summary><div id="cost"></div></details>
+  <details open><summary>Reasoning<i id="n-reasoning"></i></summary><div id="reasoning"></div></details>
+  <details><summary>Dossier<i id="n-dossier"></i></summary><div id="dossier"></div></details>
+  <details><summary>Diplomacy<i id="n-messages"></i></summary><div id="messages"></div></details>
+  <details><summary>Events<i id="n-events"></i></summary><div id="events"></div></details>
 </aside>
 
 <script type="importmap">
@@ -439,6 +464,14 @@ function knows(playerId) {
   return (S.frame.contact?.[S.focus] || []).includes(playerId);
 }
 
+/** The count beside a collapsed section heading. */
+function badge(id, value, hot = false) {
+  const el = $(`n-${id}`);
+  if (!el) return;
+  el.textContent = value ? String(value) : "";
+  el.className = hot ? "hot" : "";
+}
+
 function panels() {
   const f = S.frame, e = f.economy;
   const sign = (n) => (n ? `<span class="${n<0?"neg":"pos"}">${n>0?"+":""}${n}</span>` : "");
@@ -537,6 +570,7 @@ function panels() {
     });
   drawDiplomacy(rel);
 
+
   // The dossier: the agent's own memory, returned to it verbatim every turn.
   // Arguably the single most interesting artifact the lab produces, and until
   // now it was in the bundle and on no screen. Shown for one civ at a time -
@@ -576,9 +610,27 @@ function panels() {
   // interior life.
   const audible = (ev) =>
     S.mode !== "agent" || !S.focus || !ev.actor || ev.actor === S.focus || knows(ev.actor);
-  $("events").innerHTML = (f.events||[]).filter(audible).map((ev)=>`<div class="tick">${
+  const shown = (f.events||[]).filter(audible);
+  $("events").innerHTML = shown.map((ev)=>`<div class="tick">${
     ev.actor?`<b style="color:${cssOf(ev.actor)}">${ev.actor}</b> `:""}${esc(ev.text)}</div>`).join("")
     || `<div class="empty">Quiet turn.</div>`;
+
+  // What each collapsed section would show, so closing one costs no awareness.
+  // `hot` marks what changed *this* turn - a dossier edit, something said -
+  // because those are the reasons to open a section you had shut. Written last,
+  // where every value it reads already exists: an earlier attempt sat above the
+  // panels it counted and threw a temporal-dead-zone error on every render,
+  // which the page survived by simply never drawing the sections below it.
+  const saidNow = (f.messages || []).filter(
+    (m) => S.mode !== "agent" || !S.focus || m.channel !== "private"
+      || m.from === S.focus || m.to === S.focus
+  ).length;
+  badge("economy", S.match.civs.length);
+  badge("cost", Object.keys(S.spend || {}).length);
+  badge("reasoning", thinkers.length);
+  badge("dossier", doc ? (edited ? "edited" : "1") : 0, edited);
+  badge("messages", saidNow, saidNow > 0);
+  badge("events", shown.length);
 }
 
 /**
@@ -595,7 +647,7 @@ async function drawDiplomacy(relationLines) {
   // A private thread is readable by exactly two civs. In agent mode a thread
   // this civ is not part of does not exist.
   const visible = [...threads].filter(([key, list]) =>
-    list.length && (
+    list.some((m) => m.turn <= S.turn) && (
       S.mode !== "agent" || !S.focus || key === "public" || key.split("|").includes(S.focus)
     )
   );
@@ -609,18 +661,25 @@ async function drawDiplomacy(relationLines) {
   const tabs = visible.map(([key, list]) => {
     const label = key === "public" ? "public"
       : key.split("|").map((p) => nameOf(p)).join(" ↔ ");
+    const sofar = list.filter((m) => m.turn <= S.turn).length;
     return `<button class="thread" data-key="${key}" aria-pressed="${key===S.thread}"
-      >${esc(label)} <span class="meta">${list.length}</span></button>`;
+      >${esc(label)} <span class="meta">${sofar}</span></button>`;
   }).join("");
 
-  const body = (threads.get(S.thread) || []).map((m) => {
-    const plan = S.turn === m.turn ? null : null;
+  // Up to and including this turn, never past it. Threading the whole match at
+  // once was the right instinct and the wrong scope: it meant standing on turn 1
+  // and reading a pact negotiated on turn 28. Every other panel here is "as of
+  // turn N" - the fog, the dossier fold, the cost fold - and this one silently
+  // was not, which spoils the replay and breaks the one question the scrubber
+  // exists to answer: what did they know, and when.
+  const upToNow = (threads.get(S.thread) || []).filter((m) => m.turn <= S.turn);
+  const body = upToNow.length ? upToNow.map((m) => {
     return `<div class="msg ${m.channel} ${m.turn===S.turn?"now":""}" data-turn="${m.turn}">
       <div class="meta">turn ${m.turn} · ${nameOf(m.from)}${
         m.to ? ` → ${nameOf(m.to)}` : " · public"}</div>${esc(m.text)}
       ${m.turn === S.turn && f_reasoning(m.from) ? `<div class="aside">
         <b>privately, the same turn:</b> ${esc(f_reasoning(m.from))}</div>` : ""}</div>`;
-  }).join("");
+  }).join("") : `<div class="empty">Nothing said in this thread yet.</div>`;
 
   $("messages").innerHTML = `<div class="threads">${tabs}</div>${body}` +
     (relationLines.length ? `<div style="margin-top:8px">${relationLines.join("")}</div>` : "");
