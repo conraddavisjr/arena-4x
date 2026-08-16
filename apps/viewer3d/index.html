@@ -68,6 +68,21 @@
   /* Collapsed reasoning is clamped rather than hidden: enough to recognise the
      turn at a glance, not enough to bury the three panels underneath it. */
   .clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  #dossier .who{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px}
+  #dossier p{margin:4px 0;color:var(--dim)}
+  #dossier b{color:var(--ink);font-weight:600}
+  #dossier ul{margin:2px 0 8px;padding-left:16px;color:var(--dim)}
+  #dossier li{margin:2px 0}
+  /* What changed since last turn. The dossier is mostly stable, so the edit is
+     the signal and the rest is context. */
+  .fresh{color:var(--ink)}
+  #dossier li.fresh::marker{color:#4ade80}
+  .edited{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#4ade80;
+    border:1px solid #245c38;border-radius:3px;padding:1px 5px}
+  .trust{font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid var(--line)}
+  .trust.high{color:#4ade80;border-color:#245c38}
+  .trust.medium{color:#fbbf24;border-color:#5c4a24}
+  .trust.low{color:#f87171;border-color:#5c2424}
 </style>
 
 <main>
@@ -92,6 +107,7 @@
 <aside>
   <section><h2>Empires</h2><div id="economy"></div></section>
   <section><h2>Reasoning</h2><div id="reasoning"></div></section>
+  <section><h2>Dossier</h2><div id="dossier"></div></section>
   <section><h2>Diplomacy</h2><div id="messages"></div></section>
   <section><h2>Events</h2><div id="events"></div></section>
 </aside>
@@ -114,7 +130,7 @@ const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
                     "swordsman","horseman","catapult","trireme","wolf","barbarian"];
 
 const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
-            index:null, expanded:null };
+            index:null, expanded:null, dossiers:{}, dossiersBefore:{}, priorTrust:{} };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
@@ -190,6 +206,17 @@ async function loadFrame(turn) {
 async function foldTo(turn) {
   const owners = new Array(S.match.terrain.length).fill(null);
   const explored = new Map(S.match.civs.map((c) => [c.player_id, new Set()]));
+  // Dossiers are written as deltas, so the current one is the fold and the
+  // previous one is the fold stopped a turn short. Keeping both is what lets
+  // the panel show the *edit* rather than just the text.
+  let dossiers = {};
+  let before = {};
+  // The last view each agent expressed about each rival, whenever it expressed
+  // it. Not the same as "what its dossier said last turn": agents rewrite the
+  // whole dossier rather than editing it, so an opponent model can vanish for
+  // several turns and come back revised. Diffing only against the previous turn
+  // missed every one of those - which is most of them.
+  const priorTrust = {};
   for (let t = 1; t <= turn; t++) {
     const f = await loadFrame(t);
     for (const [i, who] of Object.entries(f.owners || {})) owners[+i] = who;
@@ -197,8 +224,17 @@ async function foldTo(turn) {
       const seen = explored.get(pid);
       if (seen) for (const i of tiles) seen.add(i);
     }
+    if (t < turn) {
+      for (const [pid, doc] of Object.entries(f.dossiers || {})) {
+        for (const m of doc.opponent_models || []) {
+          (priorTrust[pid] ??= {})[m.player_id] = m.trustworthiness;
+        }
+      }
+    }
+    before = dossiers;
+    dossiers = { ...dossiers, ...(f.dossiers || {}) };
   }
-  return { owners, explored };
+  return { owners, explored, dossiers, before, priorTrust };
 }
 
 // --- rendering -------------------------------------------------------------
@@ -252,7 +288,10 @@ async function drawTurn() {
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
-  const { owners, explored } = await foldTo(S.turn);
+  const { owners, explored, dossiers, before, priorTrust } = await foldTo(S.turn);
+  S.dossiers = dossiers;
+  S.dossiersBefore = before;
+  S.priorTrust = priorTrust;
   const known = S.focus ? explored.get(S.focus) : null;
   applyFog(lit, known);
   const at = (i) => {
@@ -405,6 +444,40 @@ function panels() {
       <div class="meta">${nameOf(m.from)}${m.to?` → ${nameOf(m.to)}`:" · public"}</div>${esc(m.text)}</div>`).join("")
       || `<div class="empty">Nothing said this turn.</div>`) +
     (rel.length?`<div style="margin-top:8px">${rel.join("")}</div>`:"");
+
+  // The dossier: the agent's own memory, returned to it verbatim every turn.
+  // Arguably the single most interesting artifact the lab produces, and until
+  // now it was in the bundle and on no screen. Shown for one civ at a time -
+  // the focused one in agent mode, the expanded one in god mode - because four
+  // of these side by side is unreadable and comparing them is not the point.
+  // The point is watching one change.
+  const who = S.mode === "agent" ? S.focus : (S.expanded || S.match.civs[0].player_id);
+  const doc = S.dossiers?.[who];
+  const was = S.dossiersBefore?.[who];
+  const edited = JSON.stringify(doc) !== JSON.stringify(was);
+  const list = (items, old) => (items || []).map((x) =>
+    `<li class="${(old||[]).includes(x) ? "" : "fresh"}">${esc(x)}</li>`).join("");
+  $("dossier").innerHTML = !doc ? `<div class="empty">Nothing written yet.</div>` : `
+    <div class="who"><span class="dot" style="background:${cssOf(who)}"></span>${nameOf(who)}
+      ${edited ? `<span class="edited">edited this turn</span>` : ""}</div>
+    <p class="${doc.doctrine !== was?.doctrine ? "fresh" : ""}"><b>Doctrine.</b>
+      ${esc(doc.doctrine || "—")}</p>
+    ${(doc.opponent_models || []).map((m) => {
+      const old = (was?.opponent_models || []).find((o) => o.player_id === m.player_id);
+      // The one line worth building all of this for. A model rewriting
+      // `trustworthiness: high` to `low` two turns after a betrayal is the
+      // whole experiment, and it is a single word in a single field.
+      const prior = S.priorTrust?.[who]?.[m.player_id];
+      const turned = prior && prior !== m.trustworthiness;
+      return `<p class="${old ? "" : "fresh"}"><b>${nameOf(m.player_id)}</b>
+        <span class="trust ${m.trustworthiness} ${turned ? "fresh" : ""}">${m.trustworthiness}</span>
+        ${turned ? `<span class="edited">was ${prior}</span>` : ""}
+        <br>${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`;
+    }).join("")}
+    ${(doc.standing_commitments || []).length ? `<p><b>Commitments.</b></p>
+      <ul>${list(doc.standing_commitments, was?.standing_commitments)}</ul>` : ""}
+    ${(doc.lessons || []).length ? `<p><b>Lessons.</b></p>
+      <ul>${list(doc.lessons, was?.lessons)}</ul>` : ""}`;
 
   // Events are already attributed, so the same rule applies: a civ hears about
   // what happened to it and what happened in public, not about a rival's

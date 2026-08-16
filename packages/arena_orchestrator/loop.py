@@ -36,7 +36,7 @@ from arena_engine import observation as obs
 from arena_engine.actions import Action
 from arena_engine.events import Event
 from arena_engine.reducer import new_match, step
-from arena_engine.types import State
+from arena_engine.types import MatchConfig, State
 
 from . import journal as jl
 from .agent import Agent
@@ -165,7 +165,13 @@ class Orchestrator:
 
         journal = Journal.open(self.root, resume=bool(recovered))
         match_id = (recovered.match_id if recovered else None) or self.config.match_id
-        state, events = new_match(match_id, self.config.seed, self.config.roster, self.config.match)
+        # A recovered config wins over the configured one for the same reason
+        # the recovered match id does: it is what the recorded decisions were
+        # made under, and anything else replays to a different board.
+        match_config = self.config.match
+        if recovered and recovered.match_config:
+            match_config = MatchConfig.model_validate(recovered.match_config)
+        state, events = new_match(match_id, self.config.seed, self.config.roster, match_config)
         # The bundle goes in its own subdirectory, apart from the journal and
         # the transcripts. Those live in the run root and the bundle is what
         # gets published - and they were all in one directory, which meant
@@ -189,6 +195,12 @@ class Orchestrator:
                 0,
                 match_id=match_id,
                 seed=self.config.seed,
+                # The whole config, not just the seed. `MatchConfig` is part of
+                # `State` and therefore part of the state hash, so a resume that
+                # rebuilt it from defaults - or from whatever flags the operator
+                # happened to retype - reproduces a different match. Resume was
+                # only working because the same `--turns` was passed by hand.
+                match_config=self.config.match.model_dump(mode="json"),
                 seats=[seat.to_json() for seat in self.config.seats],
                 state_hash=state.state_hash(),
             )

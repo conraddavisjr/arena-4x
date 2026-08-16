@@ -240,3 +240,36 @@ def test_civ_colours_are_stable_and_distinct(bundle) -> None:
     root, _ = bundle
     colours = [c["colour"] for c in read(root, "match.json")["civs"]]
     assert sorted(colours) == list(range(len(colours)))
+
+
+def test_folding_dossier_deltas_reproduces_what_each_agent_wrote(bundle) -> None:
+    """The dossier is written as a delta for the same reason borders are, and it
+    has the same failure mode: a dropped one renders wrong many turns later with
+    nothing failing at the time.
+
+    It is also the artifact the lab exists to read. An agent's dossier is the
+    only thing it carries between turns that it authored itself, so a bundle
+    that reconstructs it incorrectly misrepresents the one record of what the
+    model believed.
+    """
+    root, state = bundle
+    folded: dict[str, dict] = {}
+    for turn in sorted(int(f.stem) for f in (root / "turns").glob("*.json")):
+        folded.update(frame(root, turn).get("dossiers") or {})
+
+    truth = {pid: state.players[pid].dossier.model_dump(mode="json") for pid in state.civ_ids()}
+    assert folded == truth
+
+
+def test_an_unchanged_dossier_is_not_repeated(bundle) -> None:
+    """Four dossiers at ~2000 tokens each, repeated on 300 frames, would dominate
+    the bundle - and most turns an agent changes one line or none."""
+    root, _ = bundle
+    turns = sorted(int(f.stem) for f in (root / "turns").glob("*.json"))
+    # Heuristic bots never write one at all, so after the first frame there is
+    # nothing to repeat. A frame that re-sent an identical dossier would fail.
+    seen: dict[str, dict] = {}
+    for turn in turns:
+        for pid, doc in (frame(root, turn).get("dossiers") or {}).items():
+            assert seen.get(pid) != doc, f"turn {turn} repeated {pid}'s unchanged dossier"
+            seen[pid] = doc

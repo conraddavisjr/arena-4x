@@ -125,6 +125,9 @@ class Recovered:
 
     seed: int | None
     match_id: str | None
+    # The MatchConfig the run was played under. Part of the state hash, so a
+    # rebuild or resume that guesses it produces a different match.
+    match_config: dict[str, Any] | None
     turns: list[dict[str, Any]]
     ended: bool
     # What the interrupted run had already spent. Carried forward because the
@@ -152,6 +155,7 @@ def recover(root: Path) -> Recovered:
     journal = Journal(root=root)
     seed: int | None = None
     match_id: str | None = None
+    match_config: dict[str, Any] | None = None
     turns: list[dict[str, Any]] = []
     ended = False
     spent = 0.0
@@ -170,6 +174,7 @@ def recover(root: Path) -> Recovered:
             # recovering one - would otherwise replay to a different hash and
             # look like corruption.
             match_id = record.get("match_id")
+            match_config = record.get("match_config")
         elif record["type"] == TURN_RESOLVED:
             turns.append(record)
         elif record["type"] == MATCH_ENDED:
@@ -178,6 +183,7 @@ def recover(root: Path) -> Recovered:
     return Recovered(
         seed=seed,
         match_id=match_id,
+        match_config=match_config,
         turns=turns,
         ended=ended,
         spent_usd=round(spent, 6),

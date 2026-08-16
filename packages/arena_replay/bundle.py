@@ -87,12 +87,17 @@ def _economy(state: State, player_id: str) -> dict[str, Any]:
     }
 
 
+def _dossiers(state: State) -> dict[str, Any]:
+    return {pid: state.players[pid].dossier.model_dump(mode="json") for pid in state.civ_ids()}
+
+
 def turn_frame(
     state: State,
     events: list[Event],
     index: dict[str, int],
     previous_owners: dict[str, str | None] | None = None,
     previous_improvements: dict[str, str] | None = None,
+    previous_dossiers: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One turn of the replay.
 
@@ -120,8 +125,23 @@ def turn_frame(
         if previous_improvements is None or previous_improvements.get(k) != v
     }
 
+    # A delta, like owners and improvements, and for the same reason twice over.
+    # A dossier is capped at roughly 2000 tokens and most turns an agent changes
+    # one line of it, so repeating four of them every frame would dominate the
+    # bundle. It also happens to be exactly the shape the viewer wants: the
+    # thing worth watching is not the dossier, it is the *edit* - a model
+    # rewriting `trustworthiness: high` to `low` two turns after a betrayal is
+    # this whole experiment in one field.
+    dossiers = _dossiers(state)
+    changed = {
+        pid: d
+        for pid, d in dossiers.items()
+        if previous_dossiers is None or previous_dossiers.get(pid) != d
+    }
+
     return {
         "turn": state.turn,
+        "dossiers": changed,
         "units": [
             {
                 "id": u.id,
@@ -233,6 +253,7 @@ class BundleWriter:
     frames: list[dict[str, Any]] = field(default_factory=list)
     _previous_owners: dict[str, str | None] | None = None
     _previous_improvements: dict[str, str] | None = None
+    _previous_dossiers: dict[str, Any] | None = None
 
     @classmethod
     def start(cls, root: Path, state: State) -> BundleWriter:
@@ -246,13 +267,19 @@ class BundleWriter:
     def add(self, state: State, events: list[Event]) -> None:
         self.frames.append(
             turn_frame(
-                state, events, self.index, self._previous_owners, self._previous_improvements
+                state,
+                events,
+                self.index,
+                self._previous_owners,
+                self._previous_improvements,
+                self._previous_dossiers,
             )
         )
         self._previous_owners = {k: t.owner for k, t in state.tiles.items()}
         self._previous_improvements = {
             k: t.improvement.value for k, t in state.tiles.items() if t.improvement is not None
         }
+        self._previous_dossiers = _dossiers(state)
 
     def finish(self, state: State, stats: dict[str, Any] | None = None) -> Path:
         turns = self.root / "turns"
