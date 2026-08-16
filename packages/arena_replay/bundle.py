@@ -15,7 +15,9 @@ from arena_engine.types import State
 BUNDLE_VERSION = 1
 
 
-def match_metadata(state: State, tile_order: list[str]) -> dict[str, Any]:
+def match_metadata(
+    state: State, tile_order: list[str], models: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Everything that is fixed for the whole match, written once.
 
     `tiles` is the ordered terrain array every later frame indexes into. Terrain
@@ -36,6 +38,17 @@ def match_metadata(state: State, tile_order: list[str]) -> dict[str, Any]:
                 # and the reasoning columns all agree without the viewer having
                 # to invent a mapping.
                 "colour": index,
+                # Which model played this seat. Carried so a published replay
+                # says who was actually competing - a civ name is fiction, and
+                # the whole point of the match is the comparison.
+                #
+                # Deliberately *not* the civ name the agents are given. That
+                # string goes into the system prompt, so naming a civ after its
+                # model would tell every agent which model it is and show the
+                # others too. Whether a model plays differently when it knows it
+                # is Opus facing Grok is a genuinely interesting question, and it
+                # is not the one the baseline run is asking.
+                "model": (models or {}).get(pid),
             }
             for index, pid in enumerate(state.civ_ids())
         ],
@@ -256,11 +269,11 @@ class BundleWriter:
     _previous_dossiers: dict[str, Any] | None = None
 
     @classmethod
-    def start(cls, root: Path, state: State) -> BundleWriter:
+    def start(cls, root: Path, state: State, models: dict[str, str] | None = None) -> BundleWriter:
         tile_order = sorted(state.tiles)
         return cls(
             root=root,
-            metadata=match_metadata(state, tile_order),
+            metadata=match_metadata(state, tile_order, models),
             index={key: i for i, key in enumerate(tile_order)},
         )
 

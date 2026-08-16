@@ -178,7 +178,8 @@ class Orchestrator:
         # serving a match served the system prompts with it. The one property
         # a published match has to have is that it carries nothing but the
         # match, and "remember to exclude two files" is not that property.
-        writer = BundleWriter.start(self.bundle_root, state) if self.bundle else None
+        models = {seat.player_id: seat.model or seat.provider for seat in self.config.seats}
+        writer = BundleWriter.start(self.bundle_root, state, models) if self.bundle else None
 
         if recovered:
             # Before anything is spent: the cap belongs to the match, not to

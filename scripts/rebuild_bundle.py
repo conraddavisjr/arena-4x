@@ -63,7 +63,8 @@ def main() -> None:
         else MatchConfig(turn_limit=args.turn_limit)
     )
     state, _ = new_match(recovered.match_id or "m1", recovered.seed, roster, config)
-    writer = BundleWriter.start(args.run / "bundle", state)
+    models = {s["player_id"]: s.get("model") or s["provider"] for s in created["seats"]}
+    writer = BundleWriter.start(args.run / "bundle", state, models)
 
     for record in recovered.turns:
         actions = {
