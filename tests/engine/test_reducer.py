@@ -509,7 +509,7 @@ def test_legal_actions_never_offers_an_order_the_reducer_rejects() -> None:
         legal = legal_actions(state, player_id)
         for unit_id, options in legal["units"].items():
             unit = state.units[unit_id]
-            for target in options["move"]:
+            for target in options["move_unit"]:
                 assert hx.distance(unit.hex, hx.from_key(target)) == 1
                 tile = state.at(hx.from_key(target))
                 assert tile is not None

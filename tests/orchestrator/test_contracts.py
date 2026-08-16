@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -133,25 +134,79 @@ async def test_the_real_action_schema_is_accepted(provider: str) -> None:
 
 
 @pytest.mark.contract
-async def test_anthropic_actually_caches_the_system_prefix() -> None:
-    """The single highest-value contract test in the repo.
+@pytest.mark.parametrize(
+    "model",
+    [
+        os.environ.get("ARENA_FLAGSHIP_ANTHROPIC") or "claude-opus-5",
+        os.environ.get("ARENA_SHAKEOUT_ANTHROPIC") or "claude-haiku-4-5",
+    ],
+)
+async def test_anthropic_actually_caches_the_system_prefix(model: str) -> None:
+    """That caching happens at all - not that the breakpoint is well placed.
 
-    A cache miss does not fail anything - it just multiplies the input bill by
-    ten and nothing looks wrong. This is the only way to notice.
+    Worth being exact about what this does and does not cover, because it once
+    passed for a whole live match while every turn wrote a fresh cache entry and
+    read none.
+
+    It covers: the prefix is cacheable, the vendor still honours it, and nothing
+    dynamic has crept into the system block. A regression in any of those
+    multiplies the input bill by ten and fails nothing.
+
+    It does *not* discriminate breakpoint placement. Placing `cache_control` at
+    the top level instead of on the system block was measured writing 6,846
+    tokens on every call and reading none - but only through a non-streaming
+    request. This adapter streams, and through the streaming path both
+    placements read the cache here. Three attempts to make this test tell them
+    apart failed.
+
+    Placement is guarded in two other places instead, and they are the ones to
+    trust: `test_providers.py` asserts the request shape offline on every
+    commit, and the orchestrator journals a `cache_miss` whenever a live turn
+    writes without reading.
     """
     requires("anthropic")
-    client = build("anthropic")
+    client = build("anthropic", model)
+    # A nonce, because without one this test passes on a cache entry left by an
+    # earlier run and asserts nothing. That is not hypothetical: it is how a
+    # misplaced breakpoint survived here while writing a fresh entry on every
+    # single turn of a live match.
+    nonce = uuid.uuid4().hex
     try:
-        # The prefix must clear the 512-token minimum to be cacheable at all.
-        system = SYSTEM + "\n" + ("Rules reference. " * 400)
-        first = await client.complete(system, USER, PROBE_SCHEMA)
-        second = await client.complete(system, "Now name a rival.", PROBE_SCHEMA)
+        # The prefix must clear the model's minimum to be cacheable at all, and
+        # that minimum is larger than the 512 this once assumed.
+        system = f"{SYSTEM}\nSession {nonce}.\n" + ("Rules reference. " * 1200)
+        # The user turn has to be *realistically large*. With a short one the
+        # last cacheable block is the system prefix either way and a misplaced
+        # breakpoint still passes - which is exactly how this went unnoticed. A
+        # real observation is well over a thousand tokens, and at that size it
+        # becomes the last cacheable block and takes the breakpoint with it.
+        board = "Tile 3,-1 grassland, iron, your warrior. " * 300
+        # And the *real* schema, because it renders into the cached prefix ahead
+        # of the system block and is most of it. With a toy schema the prefix is
+        # small enough that a misplaced breakpoint still happens to work.
+        schema = for_provider(
+            json.loads(
+                (Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json").read_text()
+            ),
+            "anthropic",
+        )
+        first = await client.complete(system, f"Turn 1. {board}", schema)
+        second = await client.complete(system, f"Turn 2. {board} Now name a rival.", schema)
     finally:
         await client.aclose()
 
-    written = first.usage.cache_write_tokens + first.usage.cache_read_tokens
-    assert written > 0, "nothing was cached on the first request"
+    assert first.usage.cache_write_tokens > 0, (
+        "the first request wrote nothing to cache - the prefix is either below "
+        "the minimum cacheable size or the breakpoint is missing"
+    )
+    # The user turn deliberately differs. That is the whole point: only the
+    # system prefix is stable, so only a breakpoint *on it* can ever be read
+    # back. A breakpoint on the last block keys the cache to the observation and
+    # silently costs 12.5x the input price of the prefix, every turn, forever.
     assert second.usage.cache_read_tokens > 0, (
-        "the second identical-prefix request did not hit the cache - "
-        "something dynamic has crept into the system block"
+        "a second request with the same system prefix and a different user turn "
+        "did not hit the cache - the breakpoint is on the wrong block"
+    )
+    assert second.usage.cache_write_tokens == 0, (
+        "the second request re-wrote the cache instead of reading it"
     )

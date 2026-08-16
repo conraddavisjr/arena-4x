@@ -108,14 +108,14 @@ def _handle_diplomacy(state: State, player_id: str, legal: dict, out: list) -> N
 
     # Accept anything offered. A bot that never agrees to anything would leave
     # the treaty and trade paths completely untested.
-    for proposal_id in diplo["respondable_proposals"]:
+    for proposal_id in diplo["respond_to_proposal"]:
         out.append(
             RespondToProposal(
                 action="respond_to_proposal", proposal_id=proposal_id, response="accept"
             )
         )
 
-    targets = diplo["can_declare_war_on"]
+    targets = diplo["declare_war"]
     if not targets:
         return
     # Only declare on a civ we can actually see, and only once aggression has
@@ -209,7 +209,7 @@ def _order_units(state: State, player_id: str, legal: dict, out: list[Order]) ->
 
         # At sea is the worst place to be caught, so always look for a landing.
         if unit.embarked and unit.type is not UnitType.SETTLER:
-            ashore = _free_moves_from(options, "disembark", claimed_tiles)
+            ashore = _free_moves_from(options, "move_unit_landing", claimed_tiles)
             if ashore:
                 step = sorted(ashore)[0]
                 claimed_tiles.add(step)
@@ -233,7 +233,7 @@ def _order_units(state: State, player_id: str, legal: dict, out: list[Order]) ->
 
 def _free_moves(options: dict, claimed: set[str]) -> list[str]:
     """Moves not already taken by another unit of ours this turn."""
-    return _free_moves_from(options, "move", claimed)
+    return _free_moves_from(options, "move_unit", claimed)
 
 
 def _free_moves_from(options: dict, key: str, claimed: set[str]) -> list[str]:
@@ -255,8 +255,8 @@ def _order_settler(  # noqa: ANN001
         return
     # Nowhere worth going on foot. Put to sea and look for open land elsewhere,
     # which is the whole reason embarkation exists.
-    overseas = _free_moves_from(options, "embark", claimed) or _free_moves_from(
-        options, "disembark", claimed
+    overseas = _free_moves_from(options, "move_unit_embarking", claimed) or _free_moves_from(
+        options, "move_unit_landing", claimed
     )
     if overseas:
         step = sorted(overseas)[0]
@@ -387,7 +387,7 @@ def _order_cities(state: State, player_id: str, legal: dict, out: list[Order]) -
     for city in cities:
         if city.building is not None:
             continue
-        options = legal["cities"].get(city.id, {}).get("build", [])
+        options = legal["cities"].get(city.id, {}).get("set_production", [])
         if not options:
             continue
         want = _wanted(state, city, len(cities), counts, options, broke)
@@ -517,7 +517,7 @@ def _order_research(state: State, player_id: str, legal: dict, out: list[Order])
     player = state.players[player_id]
     if player.researching is not None:
         return
-    options = legal["research"]
+    options = legal["set_research"]
     if options:
         out.append(SetResearch(action="set_research", tech=sorted(options)[0]))
 

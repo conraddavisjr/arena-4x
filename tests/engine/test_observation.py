@@ -486,3 +486,59 @@ def export_schemas_unsupported() -> set[str]:
     import export_schemas
 
     return export_schemas.UNSUPPORTED | set(export_schemas.REWRITES)
+
+
+def test_legal_actions_uses_the_exact_action_names_from_the_schema() -> None:
+    """The observation and the schema must agree on what an action is called.
+
+    They did not. `legal_actions` offered `move`, `build` and `research` while
+    the schema demanded `move_unit`, `set_production` and `set_research`, and
+    `set_rates` appeared in neither - the tax slider was the one lever with no
+    name anywhere in the observation.
+
+    The observation is the more immediate of the two: a model reads what it is
+    shown this turn before it consults a schema it was handed once. Providers
+    that enforce the enum in the decoder hid this completely. Gemini, which does
+    not, followed the observation and emitted `research` and `set_taxes`. Those
+    orders were dropped as invalid, so the only symptom was a civ quietly doing
+    less each turn than it thought it had ordered.
+    """
+    from arena_engine.actions import _BRANCH_FIELDS
+    from arena_engine.reducer import legal_actions
+
+    state = advance(fresh(5), 12)
+    legal = legal_actions(state, "p1")
+    names = set(_BRANCH_FIELDS)
+
+    offered = set(legal) - {"units", "cities", "diplomacy"}
+    offered |= set(legal["diplomacy"])
+    for options in legal["units"].values():
+        # `embarked` is a state flag, not an action; the two move variants are
+        # both `move_unit` and say so in their names.
+        offered |= {k.split("_embarking")[0].split("_landing")[0] for k in options} - {"embarked"}
+    for options in legal["cities"].values():
+        offered |= set(options)
+
+    unknown = offered - names
+    assert not unknown, f"legal_actions offers names the schema has never heard of: {unknown}"
+
+
+def test_every_action_the_schema_accepts_is_discoverable_somewhere() -> None:
+    """An action with no name in any observation has to be guessed at, and a
+    model that guesses invents something plausible and wrong."""
+    from arena_engine.actions import _BRANCH_FIELDS
+    from arena_engine.reducer import legal_actions
+
+    state = advance(fresh(5), 25)
+    seen: set[str] = set()
+    for player_id in state.living_civ_ids():
+        legal = legal_actions(state, player_id)
+        seen |= set(legal) - {"units", "cities", "diplomacy"}
+        seen |= set(legal["diplomacy"])
+        for options in legal["units"].values():
+            seen |= {k.split("_embarking")[0].split("_landing")[0] for k in options}
+        for options in legal["cities"].values():
+            seen |= set(options)
+
+    missing = set(_BRANCH_FIELDS) - seen
+    assert not missing, f"no observation ever names these actions: {missing}"

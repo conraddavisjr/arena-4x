@@ -42,6 +42,9 @@ TURN_RESOLVED = "turn_resolved"
 AGENT_CALL = "agent_call"
 AGENT_FAILURE = "agent_failure"
 PARSE_REPAIRED = "parse_repaired"
+PROVIDER_RETRY = "provider_retry"
+THROTTLED = "throttled"
+CACHE_MISS = "cache_miss"
 BUDGET_UPDATED = "budget_updated"
 MATCH_ENDED = "match_ended"
 
@@ -124,6 +127,13 @@ class Recovered:
     match_id: str | None
     turns: list[dict[str, Any]]
     ended: bool
+    # What the interrupted run had already spent. Carried forward because the
+    # budget cap is a cap on the *match*, not on the current process: a ledger
+    # that restarts at zero lets a match that crashes near its limit resume and
+    # spend the whole cap again, and a match that crashes repeatedly has no
+    # limit at all.
+    spent_usd: float = 0.0
+    usage_by_agent: dict[str, dict[str, int]] = field(default_factory=dict)
 
     @property
     def last_turn(self) -> int:
@@ -144,7 +154,14 @@ def recover(root: Path) -> Recovered:
     match_id: str | None = None
     turns: list[dict[str, Any]] = []
     ended = False
+    spent = 0.0
+    usage: dict[str, dict[str, int]] = {}
     for record in journal.records():
+        if record["type"] == AGENT_CALL:
+            spent += record.get("cost_usd", 0.0)
+            seat = usage.setdefault(record["player_id"], {})
+            for field_name in ("input_tokens", "output_tokens", "cache_read_tokens"):
+                seat[field_name] = seat.get(field_name, 0) + record.get(field_name, 0)
         if record["type"] == MATCH_CREATED:
             seed = record.get("seed")
             # Recovered rather than re-derived from the directory name. The
@@ -158,4 +175,11 @@ def recover(root: Path) -> Recovered:
         elif record["type"] == MATCH_ENDED:
             ended = True
     turns.sort(key=lambda r: r["turn"])
-    return Recovered(seed=seed, match_id=match_id, turns=turns, ended=ended)
+    return Recovered(
+        seed=seed,
+        match_id=match_id,
+        turns=turns,
+        ended=ended,
+        spent_usd=round(spent, 6),
+        usage_by_agent=usage,
+    )

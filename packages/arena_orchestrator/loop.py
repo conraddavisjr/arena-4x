@@ -45,7 +45,7 @@ from .config import RunConfig
 from .dialects import for_provider
 from .journal import Journal
 from .providers import build as build_client
-from .providers.base import LLMClient
+from .providers.base import LLMClient, Usage
 from .resilience import CircuitBreaker, Sleeper, TokenBucket
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json"
@@ -79,6 +79,8 @@ class Orchestrator:
     # stream for the whole board, so this is the per-agent slice - a civ should
     # be told its own warrior died, not everybody's.
     _recent: dict[str, list[str]] = field(default_factory=dict)
+    # Retries absorbed since the last turn boundary, drained into the journal.
+    _retries: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.schema:
@@ -112,7 +114,24 @@ class Orchestrator:
                 timeout_s=self.config.turn_timeout_s,
                 history_size=self.config.reasoning_history,
                 sleep=self.sleep,
+                on_retry=self._note_retry(seat.player_id, seat.provider),
             )
+
+    def _note_retry(self, player_id: str, provider: str):
+        """Record a retry the ladder absorbed, so it is not invisible."""
+
+        def note(error: Exception, attempt: int, delay: float) -> None:
+            self._retries.append(
+                {
+                    "player_id": player_id,
+                    "provider": provider,
+                    "error": type(error).__name__,
+                    "attempt": attempt,
+                    "delay_s": round(delay, 2),
+                }
+            )
+
+        return note
 
     def _bucket(self, provider: str) -> TokenBucket:
         if provider not in self._buckets:
@@ -144,6 +163,13 @@ class Orchestrator:
         writer = BundleWriter.start(self.root, state) if self.bundle else None
 
         if recovered:
+            # Before anything is spent: the cap belongs to the match, not to
+            # this process. Starting at zero would let a run that crashed near
+            # its limit spend the whole cap a second time.
+            self.ledger.spent_usd = recovered.spent_usd
+            for player_id, counts in recovered.usage_by_agent.items():
+                self.ledger.by_agent.setdefault(player_id, 0.0)
+                self.ledger.usage_by_agent[player_id] = Usage(**counts)
             state, writer = self._replay(state, recovered, writer)
         else:
             journal.append(
@@ -168,6 +194,12 @@ class Orchestrator:
                 if self.after_turn:
                     self.after_turn(state)
 
+                for note in self._retries:
+                    journal.append(jl.PROVIDER_RETRY, state.turn, **note)
+                self._retries.clear()
+                waited = {p: round(b.waited_s, 1) for p, b in self._buckets.items() if b.waited_s}
+                if waited:
+                    journal.append(jl.THROTTLED, state.turn, seconds_by_provider=waited)
                 journal.append(
                     jl.TURN_RESOLVED,
                     state.turn,
@@ -231,11 +263,30 @@ class Orchestrator:
                 input_tokens=turn.usage.input_tokens,
                 output_tokens=turn.usage.output_tokens,
                 cache_read_tokens=turn.usage.cache_read_tokens,
+                # Recorded because its absence is the symptom of the cache
+                # breakpoint being in the wrong place: writes on every turn and
+                # reads on none. Cost was always right; the telemetry was not.
+                cache_write_tokens=turn.usage.cache_write_tokens,
                 cost_usd=round(cost, 6),
                 latency_ms=turn.latency_ms,
                 stop_reason=turn.stop_reason,
             )
             journal.transcript(state.turn + 1, player_id, agent.system, user, turn.text)
+
+        # A cache that never reads costs 12.5x the input price of the prefix and
+        # fails nothing. Tests can miss it - one did, for a whole live match -
+        # so the running match checks for itself.
+        if state.turn >= 2 and agent.client.name == "anthropic":
+            for turn in outcome.turns:
+                if turn.usage.cache_read_tokens == 0 and turn.usage.cache_write_tokens > 0:
+                    journal.append(
+                        jl.CACHE_MISS,
+                        state.turn + 1,
+                        player_id=player_id,
+                        wrote=turn.usage.cache_write_tokens,
+                        note="wrote a fresh cache entry instead of reading one; "
+                        "the prefix is varying or the breakpoint is misplaced",
+                    )
 
         if outcome.repaired:
             journal.append(jl.PARSE_REPAIRED, state.turn + 1, player_id=player_id)

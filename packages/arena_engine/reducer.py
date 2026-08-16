@@ -921,6 +921,16 @@ def legal_actions(state: State, player_id: str) -> dict:
     Handed to the agent verbatim in its observation. This is the single biggest
     lever on output validity: a model that is told exactly which hexes a unit
     can reach rarely invents one, so the repair loop almost never fires.
+
+    **Every key here is an action name from the schema, exactly as spelled
+    there.** That is not cosmetic. These keys used to read `move`, `build` and
+    `research` while the schema demanded `move_unit`, `set_production` and
+    `set_research`, and the observation is the more immediate of the two - a
+    model reads what it is shown this turn before it reads a schema it was
+    given once. Providers that enforce the enum in the decoder hid the
+    contradiction; Gemini, which does not, followed the observation and emitted
+    `research`. The orders were dropped and the mistake was invisible except as
+    a civ that quietly did less each turn.
     """
     player = state.players[player_id]
     units: dict[str, dict] = {}
@@ -984,12 +994,13 @@ def legal_actions(state: State, player_id: str) -> dict:
             else []
         )
         units[unit.id] = {
-            "move": sorted(moves),
-            # Kept separate from `move` so an agent can see that stepping here
-            # is a commitment - it ends the turn and leaves the unit exposed -
-            # rather than an ordinary step it might take by accident.
-            "embark": sorted(embarks),
-            "disembark": sorted(disembarks),
+            "move_unit": sorted(moves),
+            # Still separate from an ordinary step, because stepping here is a
+            # commitment - it ends the turn and leaves the unit exposed - but
+            # named so the action to send is never in doubt: all three are
+            # `move_unit`.
+            "move_unit_embarking": sorted(embarks),
+            "move_unit_landing": sorted(disembarks),
             "attack": sorted(attacks),
             "fortify": not spec.civilian and not unit.embarked,
             "found_city": can_found,
@@ -1001,13 +1012,18 @@ def legal_actions(state: State, player_id: str) -> dict:
     return {
         "units": units,
         "cities": {
-            c.id: {"build": economy.buildable(state, c)} for c in state.cities_of(player_id)
+            c.id: {"set_production": economy.buildable(state, c)}
+            for c in state.cities_of(player_id)
         },
-        "research": available_techs(frozenset(player.known_techs)),
+        "set_research": available_techs(frozenset(player.known_techs)),
+        # Always legal, and previously absent altogether - which left the tax
+        # slider as the one lever with no name anywhere in the observation. A
+        # model that wanted it had to invent one, and did: `set_taxes`.
+        "set_rates": True,
         "diplomacy": {
-            "can_message": others,
-            "can_propose_to": others,
-            "can_declare_war_on": [p for p in others if not state.at_war(player_id, p)],
-            "respondable_proposals": [p.id for p in diplomacy.open_proposals_for(state, player_id)],
+            "send_message": others,
+            "propose": others,
+            "declare_war": [p for p in others if not state.at_war(player_id, p)],
+            "respond_to_proposal": [p.id for p in diplomacy.open_proposals_for(state, player_id)],
         },
     }

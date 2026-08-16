@@ -17,10 +17,13 @@ Four things here are specific to this vendor and easy to get wrong:
    checking the stop reason turns a refusal into an IndexError, and then into a
    crash report about a bug that is not there.
 
-4. **Caching is a strict prefix match.** One changed byte in the system block
-   invalidates everything after it. `cache_control` is passed at the top level,
-   which caches the last cacheable block, and the system prompt is the only
-   thing in the request that is byte-identical every turn.
+4. **Caching is a strict prefix match, and the breakpoint placement matters
+   more than it looks.** One changed byte in the system block invalidates
+   everything after it. The convenient top-level `cache_control` caches the
+   *last* cacheable block - which is the user turn, carrying an observation that
+   differs every turn - so it wrote a fresh entry on every call and never read
+   one. The breakpoint belongs on the system block, which is the only part of
+   the request that is byte-identical turn to turn.
 
 The SDK is imported inside `__init__` rather than at module scope, so a repo
 without the orchestrator extra installed can still import the package.
@@ -79,7 +82,10 @@ class AnthropicClient:
         max_tokens: int = 32_000,
         effort: str = "high",
         thinking_display: str | None = "summarized",
-        timeout: float = 180.0,
+        # Just under the orchestrator's per-turn deadline. If the HTTP client
+        # gave up first the turn would be recorded as a transport timeout rather
+        # than as the model taking too long, which are different diagnoses.
+        timeout: float = 400.0,
     ):
         import anthropic
 
@@ -99,16 +105,22 @@ class AnthropicClient:
         request: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self._max_tokens,
-            "system": system,
+            # The breakpoint goes *on the system block*, not at the top level.
+            #
+            # Top-level `cache_control` caches the last cacheable block, and the
+            # last block is the user turn - which carries the observation and is
+            # different every turn. So the cache key included the board: every
+            # turn wrote a fresh 5,033-token entry at 1.25x and never read one.
+            # Measured side by side: top-level wrote on every call, a system
+            # breakpoint wrote once and then read 5,015 tokens on each call
+            # after. That is 12.5x the input cost of the prefix, forever, and it
+            # shows up as nothing except a slightly larger bill.
+            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": user}],
             # `format` constrains the body to the action schema; `effort` is the
             # reasoning dial. Both live under output_config - the old top-level
             # `output_format` is deprecated API-wide.
             "output_config": output_config,
-            # Caches the last cacheable block, which is the system prompt. The
-            # observation goes in the user turn precisely so it stays outside
-            # the cached prefix.
-            "cache_control": {"type": "ephemeral"},
         }
         # `effort` travels with adaptive thinking; both are 4.6-and-later.
         if self._supports_adaptive:

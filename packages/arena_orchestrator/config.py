@@ -59,7 +59,13 @@ class RunConfig:
     # passes. Generous, because a frontier model reasoning hard about a late
     # board legitimately takes a while, and killing it early would silently
     # bias the experiment toward whichever vendor happens to be fastest.
-    turn_timeout_s: float = 180.0
+    #
+    # Raised from 180s on measurement: a 30-turn shakeout lost five of the last
+    # seven turns on one seat to this limit, at a median latency of 107s and
+    # ~15,500 output tokens a call - almost all of it reasoning. That is not a
+    # hung request, it is a model thinking, and cutting it off was manufacturing
+    # exactly the vendor bias this number exists to avoid.
+    turn_timeout_s: float = 420.0
 
     # Throttling, per provider. Deliberately conservative: being rejected costs
     # a round trip plus backoff, waiting costs milliseconds.

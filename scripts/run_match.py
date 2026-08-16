@@ -111,6 +111,7 @@ def build_config(args: argparse.Namespace) -> RunConfig:
         agent_budget_awareness=args.awareness,
         requests_per_minute=1e9 if unthrottled else 50.0,
         tokens_per_minute=1e12 if unthrottled else 400_000.0,
+        **({"turn_timeout_s": args.timeout} if args.timeout else {}),
     )
 
 
@@ -131,6 +132,10 @@ async def main() -> None:
         "--budget", type=float, default=float(os.environ.get("MATCH_BUDGET_USD", 75))
     )
     parser.add_argument("--awareness", choices=["off", "tokens"], default="off")
+    parser.add_argument(
+        "--timeout", type=float, default=None,
+        help="seconds before a turn is abandoned and the agent passes",
+    )
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--resume", type=Path, default=None)
     args = parser.parse_args()

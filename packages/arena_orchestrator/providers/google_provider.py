@@ -51,11 +51,17 @@ class GoogleClient:
 
     def __init__(
         self,
-        model: str = "gemini-3.6-pro",
+        # There is no Gemini pro above 3.1, and `gemini-3.6-pro` 404s. The
+        # registry default was fixed and this one was missed, so anyone
+        # constructing the client directly still got the dead id.
+        model: str = "gemini-3.1-pro-preview",
         *,
         api_key: str | None = None,
         max_output_tokens: int = 8_000,
-        timeout: float = 180.0,
+        # Just under the orchestrator's per-turn deadline. If the HTTP client
+        # gave up first the turn would be recorded as a transport timeout rather
+        # than as the model taking too long, which are different diagnoses.
+        timeout: float = 400.0,
     ):
         from google import genai
 
