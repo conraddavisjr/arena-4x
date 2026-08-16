@@ -177,9 +177,16 @@ async def test_anthropic_sends_the_shapes_this_vendor_requires(anthropic_client)
     assert "output_format" not in request
     # Sampling parameters are rejected outright on Opus 5.
     assert not {"temperature", "top_p", "top_k"} & request.keys()
-    # The cache breakpoint covers the system prefix, and nothing dynamic is in it.
-    assert request["cache_control"] == {"type": "ephemeral"}
-    assert request["system"] == "system"
+    # The breakpoint sits on the *system block*, not at the top level. Measured
+    # side by side: top-level wrote 6,846 tokens on every single call and read
+    # none, because it caches the last cacheable block and that is the user turn
+    # carrying the observation. On the system block it wrote once and then read
+    # 5,036 on every call after - 12.5x the input price of the prefix, and the
+    # only symptom is a larger bill.
+    assert "cache_control" not in request
+    assert request["system"] == [
+        {"type": "text", "text": "system", "cache_control": {"type": "ephemeral"}}
+    ]
 
 
 async def test_anthropic_checks_the_stop_reason_before_reading_content(

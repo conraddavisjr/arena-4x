@@ -462,3 +462,44 @@ async def test_a_retry_the_ladder_absorbed_is_still_recorded(tmp_path: Path) -> 
     assert all(r["delay_s"] >= 0 for r in retries)
     # And the turn still succeeded, which is the point of absorbing it.
     assert not records(tmp_path, jl.AGENT_FAILURE)
+
+
+async def test_resume_carries_prior_spend_so_the_cap_survives_a_crash(tmp_path: Path) -> None:
+    """The budget cap belongs to the match, not to the process running it.
+
+    A ledger that restarted at zero on resume let a run that crashed near its
+    limit spend the whole cap a second time - and a run that crashed repeatedly
+    had no limit at all. Found on a real interrupted shakeout, where the resumed
+    process reported $0.22 for a match that had already spent $1.54.
+    """
+    clean, crashed = tmp_path / "clean", tmp_path / "crashed"
+    first = await make_orchestrator(clean, make_config(turns=10)).run()
+    assert first.ledger.spent_usd > 0
+
+    crashed.mkdir()
+    for name in ("journal.jsonl", "transcripts.jsonl"):
+        (crashed / name).write_text((clean / name).read_text())
+    crash_after(crashed, turn=6)
+
+    resumed = await make_orchestrator(crashed, make_config(turns=10)).run(resume=True)
+    # Everything the interrupted run was billed for, plus the four turns it
+    # took to finish - not just the latter.
+    assert resumed.ledger.spent_usd == pytest.approx(first.ledger.spent_usd, rel=0.01)
+    assert set(resumed.ledger.usage_by_agent) == {"p1", "p2", "p3", "p4"}
+
+
+async def test_a_resumed_match_still_halts_on_the_budget_cap(tmp_path: Path) -> None:
+    """The consequence that matters: carried-forward spend has to actually arm
+    the halt, not merely appear in the report."""
+    clean, crashed = tmp_path / "clean", tmp_path / "crashed"
+    first = await make_orchestrator(clean, make_config(turns=8)).run()
+
+    crashed.mkdir()
+    for name in ("journal.jsonl", "transcripts.jsonl"):
+        (crashed / name).write_text((clean / name).read_text())
+    crash_after(crashed, turn=4)
+
+    # A cap the interrupted portion has already exhausted.
+    tight = make_config(turns=8, budget_usd=first.ledger.spent_usd * 0.6)
+    resumed = await make_orchestrator(crashed, tight).run(resume=True)
+    assert resumed.reason == "budget_cap"

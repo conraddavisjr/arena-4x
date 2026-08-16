@@ -45,7 +45,7 @@ from .config import RunConfig
 from .dialects import for_provider
 from .journal import Journal
 from .providers import build as build_client
-from .providers.base import LLMClient
+from .providers.base import LLMClient, Usage
 from .resilience import CircuitBreaker, Sleeper, TokenBucket
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json"
@@ -163,6 +163,13 @@ class Orchestrator:
         writer = BundleWriter.start(self.root, state) if self.bundle else None
 
         if recovered:
+            # Before anything is spent: the cap belongs to the match, not to
+            # this process. Starting at zero would let a run that crashed near
+            # its limit spend the whole cap a second time.
+            self.ledger.spent_usd = recovered.spent_usd
+            for player_id, counts in recovered.usage_by_agent.items():
+                self.ledger.by_agent.setdefault(player_id, 0.0)
+                self.ledger.usage_by_agent[player_id] = Usage(**counts)
             state, writer = self._replay(state, recovered, writer)
         else:
             journal.append(
@@ -256,6 +263,10 @@ class Orchestrator:
                 input_tokens=turn.usage.input_tokens,
                 output_tokens=turn.usage.output_tokens,
                 cache_read_tokens=turn.usage.cache_read_tokens,
+                # Recorded because its absence is the symptom of the cache
+                # breakpoint being in the wrong place: writes on every turn and
+                # reads on none. Cost was always right; the telemetry was not.
+                cache_write_tokens=turn.usage.cache_write_tokens,
                 cost_usd=round(cost, 6),
                 latency_ms=turn.latency_ms,
                 stop_reason=turn.stop_reason,

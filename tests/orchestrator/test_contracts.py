@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -141,17 +142,47 @@ async def test_anthropic_actually_caches_the_system_prefix() -> None:
     """
     requires("anthropic")
     client = build("anthropic")
+    # A nonce, because without one this test passes on a cache entry left by an
+    # earlier run and asserts nothing. That is not hypothetical: it is how a
+    # misplaced breakpoint survived here while writing a fresh entry on every
+    # single turn of a live match.
+    nonce = uuid.uuid4().hex
     try:
-        # The prefix must clear the 512-token minimum to be cacheable at all.
-        system = SYSTEM + "\n" + ("Rules reference. " * 400)
-        first = await client.complete(system, USER, PROBE_SCHEMA)
-        second = await client.complete(system, "Now name a rival.", PROBE_SCHEMA)
+        # The prefix must clear the model's minimum to be cacheable at all, and
+        # that minimum is larger than the 512 this once assumed.
+        system = f"{SYSTEM}\nSession {nonce}.\n" + ("Rules reference. " * 1200)
+        # The user turn has to be *realistically large*. With a short one the
+        # last cacheable block is the system prefix either way and a misplaced
+        # breakpoint still passes - which is exactly how this went unnoticed. A
+        # real observation is well over a thousand tokens, and at that size it
+        # becomes the last cacheable block and takes the breakpoint with it.
+        board = "Tile 3,-1 grassland, iron, your warrior. " * 300
+        # And the *real* schema, because it renders into the cached prefix ahead
+        # of the system block and is most of it. With a toy schema the prefix is
+        # small enough that a misplaced breakpoint still happens to work.
+        schema = for_provider(
+            json.loads(
+                (Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json").read_text()
+            ),
+            "anthropic",
+        )
+        first = await client.complete(system, f"Turn 1. {board}", schema)
+        second = await client.complete(system, f"Turn 2. {board} Now name a rival.", schema)
     finally:
         await client.aclose()
 
-    written = first.usage.cache_write_tokens + first.usage.cache_read_tokens
-    assert written > 0, "nothing was cached on the first request"
+    assert first.usage.cache_write_tokens > 0, (
+        "the first request wrote nothing to cache - the prefix is either below "
+        "the minimum cacheable size or the breakpoint is missing"
+    )
+    # The user turn deliberately differs. That is the whole point: only the
+    # system prefix is stable, so only a breakpoint *on it* can ever be read
+    # back. A breakpoint on the last block keys the cache to the observation and
+    # silently costs 12.5x the input price of the prefix, every turn, forever.
     assert second.usage.cache_read_tokens > 0, (
-        "the second identical-prefix request did not hit the cache - "
-        "something dynamic has crept into the system block"
+        "a second request with the same system prefix and a different user turn "
+        "did not hit the cache - the breakpoint is on the wrong block"
+    )
+    assert second.usage.cache_write_tokens == 0, (
+        "the second request re-wrote the cache instead of reading it"
     )
