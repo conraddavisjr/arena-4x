@@ -81,6 +81,8 @@ class Orchestrator:
     _recent: dict[str, list[str]] = field(default_factory=dict)
     # Retries absorbed since the last turn boundary, drained into the journal.
     _retries: list[dict[str, Any]] = field(default_factory=list)
+    # This turn's cost per civ, drained into the frame when the turn resolves.
+    _spend: dict[str, Any] = field(default_factory=dict)
 
     @property
     def bundle_root(self) -> Path:
@@ -232,7 +234,8 @@ class Orchestrator:
                     state_hash=state.state_hash(),
                 )
                 if writer:
-                    writer.add(state, events)
+                    writer.add(state, events, self._spend)
+                self._spend = {}
 
                 if self.ledger.exhausted:
                     reason = "budget_cap"
@@ -277,6 +280,14 @@ class Orchestrator:
         agent = self.agents[player_id]
         for turn in outcome.turns:
             cost = self.ledger.charge(player_id, turn.model, turn.usage)
+            row = self._spend.setdefault(
+                player_id, {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0}
+            )
+            row["usd"] = round(row["usd"] + cost, 6)
+            row["input"] += turn.usage.input_tokens
+            row["output"] += turn.usage.output_tokens
+            row["cached"] += turn.usage.cache_read_tokens
+            row["ms"] += turn.latency_ms
             if self.allowance:
                 self.allowance.charge(player_id, turn.usage)
             journal.append(

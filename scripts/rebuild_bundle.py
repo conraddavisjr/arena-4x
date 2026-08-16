@@ -66,6 +66,20 @@ def main() -> None:
     models = {s["player_id"]: s.get("model") or s["provider"] for s in created["seats"]}
     writer = BundleWriter.start(args.run / "bundle", state, models)
 
+    # Per-turn spend, recovered from the telemetry the journal already keeps.
+    spend_by_turn: dict[int, dict] = {}
+    for r in jl.Journal(root=args.run).records():
+        if r["type"] != jl.AGENT_CALL:
+            continue
+        row = spend_by_turn.setdefault(r["turn"], {}).setdefault(
+            r["player_id"], {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0}
+        )
+        row["usd"] = round(row["usd"] + r.get("cost_usd", 0.0), 6)
+        row["input"] += r.get("input_tokens", 0)
+        row["output"] += r.get("output_tokens", 0)
+        row["cached"] += r.get("cache_read_tokens", 0)
+        row["ms"] += r.get("latency_ms", 0)
+
     for record in recovered.turns:
         actions = {
             player_id: Action.model_validate(payload)
@@ -78,7 +92,7 @@ def main() -> None:
                 f"reproduce the recorded state. Refusing to write a bundle for a match that "
                 f"did not happen."
             )
-        writer.add(state, events)
+        writer.add(state, events, spend_by_turn.get(record["turn"], {}))
 
     ended = next(
         (r for r in jl.Journal(root=args.run).records() if r["type"] == jl.MATCH_ENDED), None

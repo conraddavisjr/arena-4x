@@ -92,6 +92,12 @@
   .aside{margin-top:6px;padding:6px 8px;border-radius:4px;background:#161c25;
     color:var(--dim);font-size:12px}
   .aside b{color:#fbbf24;font-weight:600}
+  /* A zero cache rate is worth noticing: it is the difference between paying
+     1x and 0.1x for a prefix that never changes. */
+  td.warn{color:#fbbf24}
+  .pact{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#4ade80;
+    border:1px solid #245c38;border-radius:3px;padding:1px 5px}
+  .pact.lapsed{color:var(--faint);border-color:var(--line)}
 </style>
 
 <main>
@@ -115,6 +121,7 @@
 
 <aside>
   <section><h2>Empires</h2><div id="economy"></div></section>
+  <section><h2>Cost</h2><div id="cost"></div></section>
   <section><h2>Reasoning</h2><div id="reasoning"></div></section>
   <section><h2>Dossier</h2><div id="dossier"></div></section>
   <section><h2>Diplomacy</h2><div id="messages"></div></section>
@@ -140,7 +147,7 @@ const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
 
 const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
             index:null, expanded:null, dossiers:{}, dossiersBefore:{}, priorTrust:{},
-            threads:null, thread:null };
+            threads:null, thread:null, spend:{} };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
@@ -253,6 +260,7 @@ async function foldTo(turn) {
   // the panel show the *edit* rather than just the text.
   let dossiers = {};
   let before = {};
+  const spend = {};
   // The last view each agent expressed about each rival, whenever it expressed
   // it. Not the same as "what its dossier said last turn": agents rewrite the
   // whole dossier rather than editing it, so an opponent model can vanish for
@@ -273,10 +281,15 @@ async function foldTo(turn) {
         }
       }
     }
+    for (const [pid, row] of Object.entries(f.spend || {})) {
+      const acc = (spend[pid] ??= { usd: 0, input: 0, output: 0, cached: 0, ms: 0, turns: 0 });
+      for (const k of ["usd", "input", "output", "cached", "ms"]) acc[k] += row[k] || 0;
+      acc.turns += 1;
+    }
     before = dossiers;
     dossiers = { ...dossiers, ...(f.dossiers || {}) };
   }
-  return { owners, explored, dossiers, before, priorTrust };
+  return { owners, explored, dossiers, before, priorTrust, spend };
 }
 
 // --- rendering -------------------------------------------------------------
@@ -330,7 +343,8 @@ async function drawTurn() {
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
-  const { owners, explored, dossiers, before, priorTrust } = await foldTo(S.turn);
+  const { owners, explored, dossiers, before, priorTrust, spend } = await foldTo(S.turn);
+  S.spend = spend;
   S.dossiers = dossiers;
   S.dossiersBefore = before;
   S.priorTrust = priorTrust;
@@ -443,6 +457,32 @@ function panels() {
         <td>${d.cities??0}/${d.units??0}</td><td>${d.score??0}</td></tr>`;
     }).join("")}</tbody></table>`;
 
+  // The cost meter. Deliberately *not* fog-limited: what a run cost is a fact
+  // about the experiment rather than about the game, and hiding another
+  // model's bill from you in agent mode would be fog cosplay - no agent ever
+  // saw any of this, including its own.
+  const totals = S.match.civs.map((c) => ({ c, s: S.spend?.[c.player_id] })).filter((r) => r.s);
+  const grand = totals.reduce((a, r) => a + r.s.usd, 0);
+  $("cost").innerHTML = !totals.length ? `<div class="empty">No spend recorded.</div>` : `
+    <table><thead><tr><th>model</th><th>$</th><th>out tok</th><th>cache</th>
+      <th>s/turn</th><th>per 100k</th></tr></thead><tbody>${
+      totals.map(({ c, s }) => {
+        const tokens = s.input + s.output + s.cached;
+        const score = (S.frame.economy?.[c.player_id] || {}).score || 0;
+        // Score per 100k tokens: the one number that compares a cheap model
+        // playing adequately against an expensive one playing slightly better.
+        const per = tokens ? (score / (tokens / 100000)) : 0;
+        const cachePct = tokens ? Math.round(100 * s.cached / tokens) : 0;
+        return `<tr><td class="name" title="${c.civ_name}">
+          <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
+            c.model || c.civ_name}</span></td>
+          <td>${s.usd.toFixed(3)}</td><td>${(s.output/1000).toFixed(1)}k</td>
+          <td class="${cachePct ? "" : "warn"}">${cachePct}%</td>
+          <td>${(s.ms / s.turns / 1000).toFixed(0)}</td><td>${per.toFixed(0)}</td></tr>`;
+      }).join("")}</tbody></table>
+    <div class="tick" style="margin-top:6px">$${grand.toFixed(3)} through turn ${S.turn}
+      · ${(grand / S.turn * S.match.turn_limit).toFixed(2)} projected at the cap</div>`;
+
   // In agent mode only the focused civ's own thinking is shown. A rival's
   // private deliberation is the single largest thing an agent cannot see, and
   // printing all four next to a board drawn under fog made the fog decorative.
@@ -473,8 +513,23 @@ function panels() {
     panels();
   };
 
-  const rel = Object.entries(f.relations||{}).filter(([,v])=>v.state!=="neutral")
-    .map(([k,v])=>`<div class="tick">${k.replace("|"," · ")} <b>${v.state}</b> since turn ${v.since}</div>`);
+  // Anything other than plain neutrality, which includes a pact. Filtering on
+  // `state !== "neutral"` alone hid every non-aggression pact in the match,
+  // because a pact does not change the state - it is a promise with an expiry
+  // sitting on top of it.
+  const rel = Object.entries(f.relations||{})
+    .filter(([,v]) => v.state !== "neutral" || v.pact_until)
+    .map(([k,v]) => {
+      const pair = k.split("|").map((p) => nameOf(p)).join(" · ");
+      const pact = v.pact_until
+        ? (v.pact_until >= S.turn
+            ? `<span class="pact">pact until ${v.pact_until}</span>`
+            : `<span class="pact lapsed">pact lapsed turn ${v.pact_until}</span>`)
+        : "";
+      const state = v.state !== "neutral"
+        ? `<b>${v.state}</b> since turn ${v.since}` : "";
+      return `<div class="tick">${pair} ${state} ${pact}</div>`;
+    });
   drawDiplomacy(rel);
 
   // The dossier: the agent's own memory, returned to it verbatim every turn.

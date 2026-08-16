@@ -111,6 +111,7 @@ def turn_frame(
     previous_owners: dict[str, str | None] | None = None,
     previous_improvements: dict[str, str] | None = None,
     previous_dossiers: dict[str, Any] | None = None,
+    spend: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One turn of the replay.
 
@@ -155,6 +156,14 @@ def turn_frame(
     return {
         "turn": state.turn,
         "dossiers": changed,
+        # What this turn cost, per civ. Belongs in the bundle rather than only
+        # in the journal because "score gained per 100k tokens" is the closest
+        # thing this experiment has to a headline result, and a published replay
+        # that cannot show it is missing the comparison it exists to make.
+        #
+        # Safe to publish: token counts and dollars describe the match, not the
+        # prompts. Nothing here reveals what was sent.
+        "spend": spend or {},
         "units": [
             {
                 "id": u.id,
@@ -190,7 +199,18 @@ def turn_frame(
         "contact": {pid: sorted(seen) for pid, seen in state.contact.items()},
         "economy": {pid: _economy(state, pid) for pid in state.civ_ids()},
         "relations": {
-            key: {"state": rel.state.value, "since": rel.since_turn}
+            # `pact_until` was dropped here, and dropping it made the entire
+            # treaty system invisible. A non-aggression pact does not change the
+            # relation *state* - two civs at peace with a pact are still
+            # `neutral` - so a bundle carrying only the state showed nothing
+            # while three pacts were signed, one expired, and five proposals
+            # were exchanged. It looked like the agents were ignoring the
+            # diplomacy mechanics; they were using them fluently.
+            key: {
+                "state": rel.state.value,
+                "since": rel.since_turn,
+                "pact_until": rel.pact_until,
+            }
             for key, rel in sorted(state.relations.items())
         },
         "reasoning": _reasoning(events),
@@ -277,7 +297,7 @@ class BundleWriter:
             index={key: i for i, key in enumerate(tile_order)},
         )
 
-    def add(self, state: State, events: list[Event]) -> None:
+    def add(self, state: State, events: list[Event], spend: dict[str, Any] | None = None) -> None:
         self.frames.append(
             turn_frame(
                 state,
@@ -286,6 +306,7 @@ class BundleWriter:
                 self._previous_owners,
                 self._previous_improvements,
                 self._previous_dossiers,
+                spend,
             )
         )
         self._previous_owners = {k: t.owner for k, t in state.tiles.items()}
