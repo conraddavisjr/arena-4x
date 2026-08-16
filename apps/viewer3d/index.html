@@ -59,6 +59,15 @@
   .msg{border-left:2px solid var(--line);padding:4px 0 4px 8px;margin-bottom:6px}
   .msg.private{border-left-color:#f472b6}
   .msg .meta{color:var(--faint);font-size:11px}
+  tr.fogged td{color:var(--faint)}
+  td.unseen{text-align:center;font-style:italic;color:var(--faint)}
+  .card[data-civ]{cursor:pointer}
+  .card[data-civ]:hover{border-color:#33404f}
+  .card .meta{color:var(--faint);font-size:11px}
+  .card p b{color:var(--dim);font-weight:600}
+  /* Collapsed reasoning is clamped rather than hidden: enough to recognise the
+     turn at a glance, not enough to bury the three panels underneath it. */
+  .clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 </style>
 
 <main>
@@ -104,7 +113,8 @@ const CSS = ["var(--c0)", "var(--c1)", "var(--c2)", "var(--c3)"];
 const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
                     "swordsman","horseman","catapult","trireme","wolf","barbarian"];
 
-const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null, index:null };
+const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
+            index:null, expanded:null };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
@@ -316,34 +326,92 @@ async function drawTurn() {
 }
 
 // --- panels ----------------------------------------------------------------
+/**
+ * What the focused civ is entitled to know about a rival this turn.
+ *
+ * The board has always respected the fog; this panel did not. In agent mode it
+ * printed every rival's exact gold, food and score straight from the bundle's
+ * god-truth economy - in the one view whose entire purpose is showing what a
+ * civ could see when it made its decisions. Reading a bad call next to numbers
+ * the agent never had is worse than not showing the panel at all.
+ *
+ * `contact` is directed and per-turn: `contact[observer]` lists the rivals that
+ * observer can currently see. Score is revealed on contact and hidden again
+ * when it lapses, which is what the engine's own intel view does.
+ */
+function knows(playerId) {
+  if (S.mode !== "agent" || !S.focus || playerId === S.focus) return true;
+  return (S.frame.contact?.[S.focus] || []).includes(playerId);
+}
+
 function panels() {
   const f = S.frame, e = f.economy;
   const sign = (n) => (n ? `<span class="${n<0?"neg":"pos"}">${n>0?"+":""}${n}</span>` : "");
+  const hidden = `<td colspan="5" class="unseen">not in contact</td>`;
   $("economy").innerHTML = `<table><thead><tr><th>civ</th><th>gold</th><th>food</th>
     <th>prod</th><th>sci</th><th>c/u</th><th>score</th></tr></thead><tbody>${
     S.match.civs.map((c) => {
       const d = e[c.player_id] || {};
-      return `<tr class="${d.alive?"":"dead"}"><td class="name" title="${c.civ_name}">
-        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}</span></td>
+      const name = `<td class="name" title="${c.civ_name}">
+        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}</span></td>`;
+      if (!knows(c.player_id)) return `<tr class="fogged">${name}${hidden}</tr>`;
+      return `<tr class="${d.alive?"":"dead"}">${name}
         <td>${d.gold??0} ${sign(d.gold_per_turn??0)}</td><td>${d.food_stored??0} ${sign(d.food_surplus??0)}</td>
         <td>${d.production_per_turn??0}</td><td>${d.science_per_turn??0}</td>
         <td>${d.cities??0}/${d.units??0}</td><td>${d.score??0}</td></tr>`;
     }).join("")}</tbody></table>`;
 
-  $("reasoning").innerHTML = S.match.civs.filter((c) => f.reasoning?.[c.player_id]).map((c) => {
+  // In agent mode only the focused civ's own thinking is shown. A rival's
+  // private deliberation is the single largest thing an agent cannot see, and
+  // printing all four next to a board drawn under fog made the fog decorative.
+  const thinkers = S.match.civs.filter(
+    (c) => f.reasoning?.[c.player_id] && (S.mode !== "agent" || c.player_id === S.focus)
+  );
+  $("reasoning").innerHTML = thinkers.map((c) => {
     const d = f.reasoning[c.player_id];
-    return `<div class="card"><div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}</div>
-      <p class="plan">${esc(d.plan||"—")}</p></div>`;
+    // Collapsed by default, one open at a time. Bot matches produced a single
+    // sentence here; real agents produce fifteen hundred characters of numbered
+    // execution steps, and four of those in a column pushed the diplomacy feed
+    // and the event ticker off the screen entirely.
+    const open = S.expanded === c.player_id || thinkers.length === 1;
+    const detail = open ? `
+      ${d.assessment ? `<p><b>Situation.</b> ${esc(d.assessment)}</p>` : ""}
+      ${(d.threats||[]).length ? `<p><b>Threats.</b> ${esc((d.threats||[]).join(" · "))}</p>` : ""}
+      <p class="plan"><b>Plan.</b> ${esc(d.plan||"—")}</p>
+      ${d.confidence != null ? `<p class="meta">confidence ${d.confidence}</p>` : ""}` : `
+      <p class="plan clamp">${esc(d.plan||"—")}</p>`;
+    return `<div class="card ${open?"open":""}" data-civ="${c.player_id}">
+      <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}
+        <span class="meta">${open?"▾":"▸"}</span></div>${detail}</div>`;
   }).join("") || `<div class="empty">No reasoning this turn.</div>`;
+  $("reasoning").onclick = (ev) => {
+    const card = ev.target.closest(".card[data-civ]");
+    if (!card) return;
+    S.expanded = S.expanded === card.dataset.civ ? null : card.dataset.civ;
+    panels();
+  };
 
   const rel = Object.entries(f.relations||{}).filter(([,v])=>v.state!=="neutral")
     .map(([k,v])=>`<div class="tick">${k.replace("|"," · ")} <b>${v.state}</b> since turn ${v.since}</div>`);
-  $("messages").innerHTML = ((f.messages||[]).map((m)=>`<div class="msg ${m.channel}">
+  // A private message is readable by exactly two civs. In agent mode the feed
+  // shows the public channel plus this civ's own correspondence and nothing
+  // else - reading someone else's DMs is the most direct way there is to see
+  // something an agent could not.
+  const mine = (m) =>
+    S.mode !== "agent" || !S.focus ||
+    m.channel !== "private" || m.from === S.focus || m.to === S.focus;
+  const said = (f.messages||[]).filter(mine);
+  $("messages").innerHTML = (said.map((m)=>`<div class="msg ${m.channel}">
       <div class="meta">${nameOf(m.from)}${m.to?` → ${nameOf(m.to)}`:" · public"}</div>${esc(m.text)}</div>`).join("")
       || `<div class="empty">Nothing said this turn.</div>`) +
     (rel.length?`<div style="margin-top:8px">${rel.join("")}</div>`:"");
 
-  $("events").innerHTML = (f.events||[]).map((ev)=>`<div class="tick">${
+  // Events are already attributed, so the same rule applies: a civ hears about
+  // what happened to it and what happened in public, not about a rival's
+  // interior life.
+  const audible = (ev) =>
+    S.mode !== "agent" || !S.focus || !ev.actor || ev.actor === S.focus || knows(ev.actor);
+  $("events").innerHTML = (f.events||[]).filter(audible).map((ev)=>`<div class="tick">${
     ev.actor?`<b style="color:${cssOf(ev.actor)}">${ev.actor}</b> `:""}${esc(ev.text)}</div>`).join("")
     || `<div class="empty">Quiet turn.</div>`;
 }
@@ -402,7 +470,10 @@ function togglePlay() {
     const [mode, who] = b.dataset.mode.split(":");
     S.mode = mode; S.focus = who || null;
     for (const x of $("modes").children) x.setAttribute("aria-pressed", x === b);
+    // The panels are fog-aware now, so a mode change has to redraw them too.
+    S.expanded = S.focus;
     drawTurn();
+    panels();
   };
   $("top").onclick = () => {
     controls.target.copy(S.home.target);

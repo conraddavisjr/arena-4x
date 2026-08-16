@@ -1,6 +1,7 @@
 # Every command you need to run this project. If a workflow is not here, it is
 # not a workflow yet.
 
+PORT    ?= 8123
 PYTHON  ?= python3
 VENV    := .venv
 PY      := $(VENV)/bin/python
@@ -9,7 +10,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d export
+.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -73,8 +74,9 @@ clean:  ## Remove caches and build artifacts
 # changing into the bundle first put the interpreter out of reach and every
 # serve target failed with "No such file or directory".
 view:  ## Serve an exported match in the browser. make view MATCH=output/match-4
-	@echo "http://localhost:8123/  (ctrl-c to stop)"
-	@$(PY) -m http.server 8123 --bind 127.0.0.1 --directory $(or $(MATCH),output/match-4)
+	@$(MAKE) -s port-free GOAL=view
+	@echo "http://localhost:$(PORT)/  (ctrl-c to stop)"
+	@$(PY) -m http.server $(PORT) --bind 127.0.0.1 --directory $(or $(MATCH),output/match-4)
 
 export:  ## Play a match and write a replay bundle. make export SEED=4
 	$(PY) scripts/export_match.py --seed $(or $(SEED),4)
@@ -82,10 +84,29 @@ export:  ## Play a match and write a replay bundle. make export SEED=4
 	@echo "then: make view MATCH=output/match-$(or $(SEED),4)"
 
 view3d:  ## Serve the 3D world viewer. make view3d MATCH=output/match-4
+	@$(MAKE) -s port-free GOAL=view3d
 	@$(MAKE) -s stage3d MATCH=$(or $(MATCH),output/match-4)
-	@echo "board:  http://localhost:8123/world.html"
-	@echo "models: http://localhost:8123/models.html   (ctrl-c to stop)"
-	@$(PY) -m http.server 8123 --bind 127.0.0.1 --directory $(or $(MATCH),output/match-4)
+	@echo "board:  http://localhost:$(PORT)/world.html"
+	@echo "models: http://localhost:$(PORT)/models.html   (ctrl-c to stop)"
+	@$(PY) -m http.server $(PORT) --bind 127.0.0.1 --directory $(or $(MATCH),output/match-4)
+
+# Checked *before* the URL is printed, which is the whole point. These targets
+# used to announce the address and then fail to bind, so a stale server left
+# over from an earlier run kept answering on it - and the browser showed a
+# different match with nothing to say so. A crash you scroll past is worse than
+# a crash you read: HTTP 200 proves a server is up, not that it is yours.
+port-free:
+	@if lsof -nP -iTCP:$(PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
+		pid=$$(lsof -nP -iTCP:$(PORT) -sTCP:LISTEN -t | head -1); \
+		echo "port $(PORT) is already in use by pid $$pid."; \
+		echo "it is currently serving:"; \
+		curl -s --max-time 2 http://localhost:$(PORT)/match.json \
+			| head -c 200 | sed 's/^/    /' || echo "    (not an ARENA-4X bundle)"; \
+		echo ""; \
+		echo "stop it with:  kill $$pid"; \
+		echo "or pick another port:  make $(or $(GOAL),view3d) PORT=8124 MATCH=$(MATCH)"; \
+		exit 1; \
+	fi
 
 stage3d:
 	@cp -r apps/viewer3d/vendor $(or $(MATCH),output/match-4)/vendor
