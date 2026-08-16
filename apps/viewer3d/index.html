@@ -60,6 +60,34 @@
   summary i{font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums;
     margin-left:auto;font-size:11px}
   summary i.hot{color:#4ade80}
+  /* Stacked bars, pure CSS. A chart library would be the fifth dependency and
+     the first one that has to be vendored for an offline page. */
+  .sigrow{padding:6px 0;border-bottom:1px solid #1a212b}
+  .sigrow:last-of-type{border-bottom:none}
+  .sigrow .who{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:4px}
+  .sigrow .tags{margin-left:auto;display:flex;gap:4px}
+  .tag{font-size:10px;color:var(--faint);border:1px solid var(--line);border-radius:3px;
+    padding:0 5px;font-weight:500}
+  .tag.bad{color:#f87171;border-color:#5c2424}
+  .metric{display:flex;align-items:center;gap:8px;margin:2px 0}
+  .metric label{width:52px;color:var(--faint);font-size:11px}
+  .metric .n{color:var(--faint);font-size:11px;min-width:38px;text-align:right}
+  .k{font-weight:600}
+  .k.gold{color:#fbbf24}.k.sci{color:#38bdf8}.k.prod{color:#8b949e}
+  .k.mil{color:#f87171}.k.pub{color:#4ade80}.k.dm{color:#f472b6}
+  .bars{display:inline-flex;width:100%;height:8px;border-radius:2px;overflow:hidden;
+    background:#1b222c;min-width:56px}
+  .bars i{display:block;height:100%}
+  .bars i.gold{background:#fbbf24}
+  .bars i.sci{background:#38bdf8}
+  .bars i.prod{background:#8b949e}
+  .bars i.mil{background:#f87171}
+  .bars i.pub{background:#4ade80}
+  .bars i.dm{background:#f472b6}
+  td .n{margin-left:6px;color:var(--faint);font-size:11px}
+  td.hurt{color:#f87171;font-weight:600}
+  .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+  button.who-btn{font-size:11px;padding:3px 7px}
   table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
   th,td{text-align:right;padding:3px 4px}
   th:first-child,td:first-child{text-align:left}
@@ -151,6 +179,7 @@
   <details><summary>Dossier<i id="n-dossier"></i></summary><div id="dossier"></div></details>
   <details><summary>Diplomacy<i id="n-messages"></i></summary><div id="messages"></div></details>
   <details><summary>Events<i id="n-events"></i></summary><div id="events"></div></details>
+  <details><summary>Signals<i id="n-signals"></i></summary><div id="signals"></div></details>
 </aside>
 
 <script type="importmap">
@@ -172,7 +201,7 @@ const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
 
 const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
             index:null, expanded:null, dossiers:{}, dossiersBefore:{}, priorTrust:{},
-            threads:null, thread:null, spend:{} };
+            threads:null, thread:null, spend:{}, signals:{}, dossierOf:null };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
@@ -286,6 +315,13 @@ async function foldTo(turn) {
   let dossiers = {};
   let before = {};
   const spend = {};
+  // Cumulative signals. Everything here is derived from what the bundle already
+  // carries - no new engine data - and folded forward like everything else, so
+  // the panel reads "as of turn N" rather than "for the whole match".
+  const signals = {};
+  const sig = (pid) => (signals[pid] ??= {
+    said: 0, dm: 0, lostToWild: 0, sacked: 0, met: new Set(), battles: 0,
+  });
   // The last view each agent expressed about each rival, whenever it expressed
   // it. Not the same as "what its dossier said last turn": agents rewrite the
   // whole dossier rather than editing it, so an opponent model can vanish for
@@ -306,6 +342,25 @@ async function foldTo(turn) {
         }
       }
     }
+    for (const m of f.messages || []) {
+      const row = sig(m.from);
+      row.said += 1;
+      if (m.channel === "private") row.dm += 1;
+    }
+    for (const e of f.events || []) {
+      if (!e.actor) continue;
+      const row = sig(e.actor);
+      // "lost to the wilderness" is how the engine phrases a kill by the
+      // neutral faction. Attribution is on the *victim*, which is what makes
+      // this answer the question worth asking: who is being bled by the map.
+      if (e.type === "unit_killed" && e.text.includes("wilderness")) row.lostToWild += 1;
+      if (e.type === "city_sacked") row.sacked += 1;
+      if (e.type === "combat_resolved") row.battles += 1;
+      if (e.type === "first_contact") {
+        const other = S.match.civs.find((c) => e.text.includes(c.civ_name) && c.player_id !== e.actor);
+        if (other) row.met.add(other.player_id);
+      }
+    }
     for (const [pid, row] of Object.entries(f.spend || {})) {
       const acc = (spend[pid] ??= { usd: 0, input: 0, output: 0, cached: 0, ms: 0, turns: 0 });
       for (const k of ["usd", "input", "output", "cached", "ms"]) acc[k] += row[k] || 0;
@@ -314,7 +369,7 @@ async function foldTo(turn) {
     before = dossiers;
     dossiers = { ...dossiers, ...(f.dossiers || {}) };
   }
-  return { owners, explored, dossiers, before, priorTrust, spend };
+  return { owners, explored, dossiers, before, priorTrust, spend, signals };
 }
 
 // --- rendering -------------------------------------------------------------
@@ -368,8 +423,9 @@ async function drawTurn() {
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
-  const { owners, explored, dossiers, before, priorTrust, spend } = await foldTo(S.turn);
+  const { owners, explored, dossiers, before, priorTrust, spend, signals } = await foldTo(S.turn);
   S.spend = spend;
+  S.signals = signals;
   S.dossiers = dossiers;
   S.dossiersBefore = before;
   S.priorTrust = priorTrust;
@@ -577,13 +633,28 @@ function panels() {
   // the focused one in agent mode, the expanded one in god mode - because four
   // of these side by side is unreadable and comparing them is not the point.
   // The point is watching one change.
-  const who = S.mode === "agent" ? S.focus : (S.expanded || S.match.civs[0].player_id);
+  // Explicit, not inherited. It used to follow whichever reasoning card was
+  // expanded, which meant the panel silently changed subject and gave no way to
+  // say "show me this one" - so it read as "the dossier" rather than "one civ's
+  // dossier", which is a different and much more confusing thing.
+  const who = S.mode === "agent" ? S.focus
+    : (S.dossierOf || S.expanded || S.match.civs[0].player_id);
   const doc = S.dossiers?.[who];
   const was = S.dossiersBefore?.[who];
   const edited = JSON.stringify(doc) !== JSON.stringify(was);
   const list = (items, old) => (items || []).map((x) =>
     `<li class="${(old||[]).includes(x) ? "" : "fresh"}">${esc(x)}</li>`).join("");
-  $("dossier").innerHTML = !doc ? `<div class="empty">Nothing written yet.</div>` : `
+  const picker = S.mode === "agent" ? "" : `<div class="picker">${
+    S.match.civs.map((c) => `<button class="who-btn" data-who="${c.player_id}"
+      aria-pressed="${c.player_id === who}">${esc(c.model || c.civ_name)}</button>`).join("")
+  }</div>`;
+  // Said plainly, because it is the panel people most often misread: this is
+  // not a log of everything the agent thought. It is the small note the agent
+  // chooses to write to itself and is handed back verbatim next turn. The
+  // turn-by-turn thinking is the Reasoning panel, for all four civs at once.
+  const note = `<p class="meta">What this agent chose to remember. Its
+    turn-by-turn thinking is in Reasoning.</p>`;
+  $("dossier").innerHTML = picker + (!doc ? `<div class="empty">Nothing written yet.</div>` : note + `
     <div class="who"><span class="dot" style="background:${cssOf(who)}"></span>${nameOf(who)}
       ${edited ? `<span class="edited">edited this turn</span>` : ""}</div>
     <p class="${doc.doctrine !== was?.doctrine ? "fresh" : ""}"><b>Doctrine.</b>
@@ -603,7 +674,13 @@ function panels() {
     ${(doc.standing_commitments || []).length ? `<p><b>Commitments.</b></p>
       <ul>${list(doc.standing_commitments, was?.standing_commitments)}</ul>` : ""}
     ${(doc.lessons || []).length ? `<p><b>Lessons.</b></p>
-      <ul>${list(doc.lessons, was?.lessons)}</ul>` : ""}`;
+      <ul>${list(doc.lessons, was?.lessons)}</ul>` : ""}`);
+  $("dossier").onclick = (ev) => {
+    const b = ev.target.closest(".who-btn");
+    if (!b) return;
+    S.dossierOf = b.dataset.who;
+    panels();
+  };
 
   // Events are already attributed, so the same rule applies: a civ hears about
   // what happened to it and what happened in public, not about a rival's
@@ -631,6 +708,76 @@ function panels() {
   badge("dossier", doc ? (edited ? "edited" : "1") : 0, edited);
   badge("messages", saidNow, saidNow > 0);
   badge("events", shown.length);
+  drawSignals();
+}
+
+/**
+ * The at-a-glance read: where each civ is pointed, and what is being done to it.
+ *
+ * The raw panels above answer "what happened this turn" well and "is anyone in
+ * trouble" badly - that question is cumulative and comparative, and reading it
+ * out of thirty turns of prose is not realistic. Everything here is derived
+ * from data the bundle already carries and folded to the current turn.
+ */
+function drawSignals() {
+  const f = S.frame;
+  const rows = S.match.civs.map((c) => {
+    const e = f.economy?.[c.player_id] || {};
+    const g = S.signals?.[c.player_id] || { said: 0, dm: 0, lostToWild: 0, sacked: 0,
+                                            met: new Set(), battles: 0 };
+    return { c, e, g };
+  });
+
+  // Bars are scaled against the strongest civ rather than against an absolute,
+  // because the question is always comparative: nobody cares that a civ makes
+  // nine science, they care that it makes half what the leader makes.
+  const peak = (pick) => Math.max(1, ...rows.map(({ e }) => pick(e) || 0));
+  const gold = peak((e) => e.gold_per_turn);
+  const sci = peak((e) => e.science_per_turn);
+  const prod = peak((e) => e.production_per_turn);
+  const talk = Math.max(1, ...rows.map(({ g }) => g.said));
+
+  const bar = (segments) => `<span class="bars">${segments.map(([w, cls, title]) =>
+    `<i class="${cls}" style="width:${Math.round(Math.max(0, Math.min(1, w)) * 100)}%"
+      title="${title}"></i>`).join("")}</span>`;
+
+  // A block per civ rather than a table row. Six columns in a 340px panel
+  // truncated every model name to "claude-ha", and a block leaves room to add
+  // signals without re-cutting the layout each time.
+  $("signals").innerHTML = rows.map(({ c, e, g }) => {
+    const units = e.units || 0;
+    const military = e.military || 0;
+    const hurt = g.lostToWild + g.sacked;
+    const tags = [
+      g.met.size ? `<span class="tag">met ${g.met.size}</span>` : "",
+      g.said ? `<span class="tag">${g.said} sent</span>` : "",
+      hurt ? `<span class="tag bad" title="${g.lostToWild} units lost, ${g.sacked} cities sacked"
+        >${hurt} to the wild</span>` : "",
+    ].join("");
+    return `<div class="sigrow">
+      <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${
+        esc(c.model || c.civ_name)}<span class="tags">${tags}</span></div>
+      <div class="metric"><label>economy</label>${bar([
+        [(e.gold_per_turn || 0) / gold, "gold", `${e.gold_per_turn || 0} gold/turn`],
+        [(e.science_per_turn || 0) / sci, "sci", `${e.science_per_turn || 0} science/turn`],
+        [(e.production_per_turn || 0) / prod, "prod", `${e.production_per_turn || 0} production/turn`],
+      ])}</div>
+      <div class="metric"><label>army</label>${bar([[units ? military / units : 0, "mil",
+        `${military} of ${units} units are military`]])}<span class="n">${military}/${units}</span></div>
+      <div class="metric"><label>talk</label>${bar([
+        [(g.said - g.dm) / talk, "pub", `${g.said - g.dm} public`],
+        [g.dm / talk, "dm", `${g.dm} private`],
+      ])}<span class="n">${g.said || "0"}</span></div>
+    </div>`;
+  }).join("") + `<div class="tick" style="margin-top:8px">economy is
+    <b class="k gold">gold</b> / <b class="k sci">science</b> / <b class="k prod">production</b>,
+    each scaled against the strongest civ · army is the
+    <b class="k mil">military</b> share of units · talk is
+    <b class="k pub">public</b> / <b class="k dm">private</b> · the wild is
+    barbarians and wolves</div>`;
+
+  const pressure = rows.reduce((a, { g }) => a + g.lostToWild + g.sacked, 0);
+  badge("signals", pressure || S.match.civs.length, pressure > 0);
 }
 
 /**
