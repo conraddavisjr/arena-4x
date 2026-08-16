@@ -72,6 +72,15 @@
   .metric{display:flex;align-items:center;gap:8px;margin:2px 0}
   .metric label{width:52px;color:var(--faint);font-size:11px}
   .metric .n{color:var(--faint);font-size:11px;min-width:38px;text-align:right}
+  .metric.clickable{cursor:pointer}
+  .metric.clickable:hover label{color:var(--ink)}
+  .fights{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+  .fights .who{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px}
+  .fights .who button{margin-left:auto}
+  .fight{padding:4px 0 4px 8px;border-left:2px solid var(--line);margin-bottom:4px;
+    color:var(--dim)}
+  .fight.won{border-left-color:#4ade80}
+  .fight.lost{border-left-color:#f87171}
   .k{font-weight:600}
   .k.gold{color:#fbbf24}.k.sci{color:#38bdf8}.k.prod{color:#8b949e}
   .k.mil{color:#f87171}.k.pub{color:#4ade80}.k.dm{color:#f472b6}
@@ -82,6 +91,9 @@
   .bars i.sci{background:#38bdf8}
   .bars i.prod{background:#8b949e}
   .bars i.mil{background:#f87171}
+  .bars i.food{background:#4ade80}
+  .bars i.war{background:#f87171}
+  .bars i.wild{background:#a855f7}
   .bars i.pub{background:#4ade80}
   .bars i.dm{background:#f472b6}
   td .n{margin-left:6px;color:var(--faint);font-size:11px}
@@ -93,6 +105,8 @@
   th:first-child,td:first-child{text-align:left}
   td.name{width:42%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   thead th{color:var(--dim);font-weight:500;font-size:11px;border-bottom:1px solid var(--line)}
+  thead th[title]{cursor:help;text-decoration:underline dotted var(--faint);
+    text-underline-offset:3px}
   .civ{display:flex;align-items:center;gap:6px}
   .dot{width:9px;height:9px;border-radius:50%;flex:none}
   .dead{opacity:.4;text-decoration:line-through}
@@ -130,7 +144,18 @@
   .trust.medium{color:#fbbf24;border-color:#5c4a24}
   .trust.low{color:#f87171;border-color:#5c2424}
   .threads{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
-  button.thread{font-size:11px;padding:3px 7px}
+  button.thread{font-size:11px;padding:3px 7px;display:inline-flex;align-items:center;gap:5px}
+  button.thread .dot{width:8px;height:8px}
+  button.thread .arrow{color:var(--faint)}
+  button.thread[aria-pressed="true"] .arrow{color:#cfe0ff}
+  /* Public and private have to be told apart at a glance; a border colour alone
+     was doing all the work and none of it legibly. */
+  .chan{font-size:9px;text-transform:uppercase;letter-spacing:.06em;border-radius:3px;
+    padding:1px 4px;margin-right:4px;font-weight:600}
+  .chan.private{color:#f472b6;border:1px solid #5c2444}
+  .chan.public{color:#4ade80;border:1px solid #245c38}
+  .msg .meta .dot{width:8px;height:8px;display:inline-block;vertical-align:middle;
+    margin-right:3px}
   .msg{cursor:pointer}
   .msg.now{border-left-color:#2f6feb;background:#0f141b}
   /* The sender's private plan, shown beside what it actually said. Reading the
@@ -201,7 +226,7 @@ const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
 
 const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
             index:null, expanded:null, dossiers:{}, dossiersBefore:{}, priorTrust:{},
-            threads:null, thread:null, spend:{}, signals:{}, dossierOf:null };
+            threads:null, thread:null, spend:{}, signals:{}, dossierOf:"all", combatOf:null };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
@@ -320,7 +345,8 @@ async function foldTo(turn) {
   // the panel reads "as of turn N" rather than "for the whole match".
   const signals = {};
   const sig = (pid) => (signals[pid] ??= {
-    said: 0, dm: 0, lostToWild: 0, sacked: 0, met: new Set(), battles: 0,
+    said: 0, dm: 0, lostToWild: 0, sacked: 0, met: new Set(),
+    fights: 0, kills: 0, losses: 0, wildFights: 0, log: [],
   });
   // The last view each agent expressed about each rival, whenever it expressed
   // it. Not the same as "what its dossier said last turn": agents rewrite the
@@ -355,10 +381,28 @@ async function foldTo(turn) {
       // this answer the question worth asking: who is being bled by the map.
       if (e.type === "unit_killed" && e.text.includes("wilderness")) row.lostToWild += 1;
       if (e.type === "city_sacked") row.sacked += 1;
-      if (e.type === "combat_resolved") row.battles += 1;
+
       if (e.type === "first_contact") {
         const other = S.match.civs.find((c) => e.text.includes(c.civ_name) && c.player_id !== e.actor);
         if (other) row.met.add(other.player_id);
+      }
+    }
+    // Combat, from both sides. A fight is recorded against attacker and
+    // defender alike, because "who is being worn down" is the question, and a
+    // civ that is only ever attacked never appears in a list keyed by actor.
+    for (const c of f.combat || []) {
+      const wild = (pid) => pid && !S.match.civs.some((x) => x.player_id === pid);
+      for (const [me, them, iDied, theyDied] of [
+        [c.attacker, c.defender, c.attacker_died, c.defender_died],
+        [c.defender, c.attacker, c.defender_died, c.attacker_died],
+      ]) {
+        if (wild(me) || !me) continue;
+        const row = sig(me);
+        row.fights += 1;
+        if (wild(them)) row.wildFights += 1;
+        if (iDied) row.losses += 1;
+        if (theyDied) row.kills += 1;
+        row.log.push({ turn: t, ...c, mine: me });
       }
     }
     for (const [pid, row] of Object.entries(f.spend || {})) {
@@ -520,6 +564,13 @@ function knows(playerId) {
   return (S.frame.contact?.[S.focus] || []).includes(playerId);
 }
 
+function dossierPick(ev) {
+  const b = ev.target.closest(".who-btn");
+  if (!b) return;
+  S.dossierOf = b.dataset.who;
+  panels();
+}
+
 /** The count beside a collapsed section heading. */
 function badge(id, value, hot = false) {
   const el = $(`n-${id}`);
@@ -553,8 +604,14 @@ function panels() {
   const totals = S.match.civs.map((c) => ({ c, s: S.spend?.[c.player_id] })).filter((r) => r.s);
   const grand = totals.reduce((a, r) => a + r.s.usd, 0);
   $("cost").innerHTML = !totals.length ? `<div class="empty">No spend recorded.</div>` : `
-    <table><thead><tr><th>model</th><th>$</th><th>out tok</th><th>cache</th>
-      <th>s/turn</th><th>per 100k</th></tr></thead><tbody>${
+    <table><thead><tr>
+      <th title="Which model played this seat.">model</th>
+      <th title="What this seat has cost so far, in US dollars, from the token counts the vendor actually reported - never an estimate. This is what the budget cap is measured against.">$</th>
+      <th title="Output tokens produced, including reasoning tokens where the vendor bills them as output. This is the expensive half: output runs about five times the price of input.">out tok</th>
+      <th title="Share of input tokens served from cache at roughly a tenth the price. The system prompt is identical every turn, so a healthy number here is large. Zero is worth investigating on a vendor with an explicit cache breakpoint.">cache</th>
+      <th title="Median wall-clock seconds per turn. Turns resolve simultaneously, so the slowest seat sets the pace of the whole match.">s/turn</th>
+      <th title="Score gained per 100,000 tokens spent. The efficiency figure: it compares a cheap model playing adequately against an expensive one playing slightly better, and a leaderboard by this can invert a leaderboard by score.">per 100k</th>
+      </tr></thead><tbody>${
       totals.map(({ c, s }) => {
         const tokens = s.input + s.output + s.cached;
         const score = (S.frame.economy?.[c.player_id] || {}).score || 0;
@@ -644,9 +701,11 @@ function panels() {
   const edited = JSON.stringify(doc) !== JSON.stringify(was);
   const list = (items, old) => (items || []).map((x) =>
     `<li class="${(old||[]).includes(x) ? "" : "fresh"}">${esc(x)}</li>`).join("");
-  const picker = S.mode === "agent" ? "" : `<div class="picker">${
+  const showAll = S.mode !== "agent" && S.dossierOf === "all";
+  const picker = S.mode === "agent" ? "" : `<div class="picker">
+    <button class="who-btn" data-who="all" aria-pressed="${showAll}">all</button>${
     S.match.civs.map((c) => `<button class="who-btn" data-who="${c.player_id}"
-      aria-pressed="${c.player_id === who}">${esc(c.model || c.civ_name)}</button>`).join("")
+      aria-pressed="${!showAll && c.player_id === who}">${esc(c.model || c.civ_name)}</button>`).join("")
   }</div>`;
   // Said plainly, because it is the panel people most often misread: this is
   // not a log of everything the agent thought. It is the small note the agent
@@ -654,6 +713,30 @@ function panels() {
   // turn-by-turn thinking is the Reasoning panel, for all four civs at once.
   const note = `<p class="meta">What this agent chose to remember. Its
     turn-by-turn thinking is in Reasoning.</p>`;
+  // "All" shows every civ's memory side by side, including the ones that have
+  // written nothing - an empty dossier is itself a finding, and two of four
+  // models in the first match kept no opponent models at all. Scrubbing with
+  // this open is how you watch four sets of notes diverge over a match.
+  if (showAll) {
+    $("dossier").innerHTML = picker + note + S.match.civs.map((c) => {
+      const d = S.dossiers?.[c.player_id];
+      const changed = !!(f.dossiers || {})[c.player_id];
+      return `<div class="card"><div class="who">
+        <span class="dot" style="background:${CSS[c.colour]}"></span>${esc(c.model || c.civ_name)}
+        ${changed ? `<span class="edited">edited</span>` : ""}</div>
+        ${!d ? `<p class="empty">Nothing written yet.</p>` : `
+        <p class="clamp">${esc(d.doctrine || "no doctrine")}</p>
+        <p class="meta">${(d.opponent_models || []).length
+            ? (d.opponent_models || []).map((m) =>
+                `${esc(nameOf(m.player_id))} <span class="trust ${m.trustworthiness}"
+                  >${m.trustworthiness}</span>`).join(" · ")
+            : "no opponent models"} ·
+          ${(d.standing_commitments || []).length} commitments ·
+          ${(d.lessons || []).length} lessons</p>`}</div>`;
+    }).join("");
+    $("dossier").onclick = dossierPick;
+    return;
+  }
   $("dossier").innerHTML = picker + (!doc ? `<div class="empty">Nothing written yet.</div>` : note + `
     <div class="who"><span class="dot" style="background:${cssOf(who)}"></span>${nameOf(who)}
       ${edited ? `<span class="edited">edited this turn</span>` : ""}</div>
@@ -675,12 +758,7 @@ function panels() {
       <ul>${list(doc.standing_commitments, was?.standing_commitments)}</ul>` : ""}
     ${(doc.lessons || []).length ? `<p><b>Lessons.</b></p>
       <ul>${list(doc.lessons, was?.lessons)}</ul>` : ""}`);
-  $("dossier").onclick = (ev) => {
-    const b = ev.target.closest(".who-btn");
-    if (!b) return;
-    S.dossierOf = b.dataset.who;
-    panels();
-  };
+  $("dossier").onclick = dossierPick;
 
   // Events are already attributed, so the same rule applies: a civ hears about
   // what happened to it and what happened in public, not about a rival's
@@ -733,9 +811,11 @@ function drawSignals() {
   // nine science, they care that it makes half what the leader makes.
   const peak = (pick) => Math.max(1, ...rows.map(({ e }) => pick(e) || 0));
   const gold = peak((e) => e.gold_per_turn);
+  const food = peak((e) => e.food_surplus);
   const sci = peak((e) => e.science_per_turn);
   const prod = peak((e) => e.production_per_turn);
   const talk = Math.max(1, ...rows.map(({ g }) => g.said));
+  const fights = Math.max(1, ...rows.map(({ g }) => g.fights));
 
   const bar = (segments) => `<span class="bars">${segments.map(([w, cls, title]) =>
     `<i class="${cls}" style="width:${Math.round(Math.max(0, Math.min(1, w)) * 100)}%"
@@ -758,12 +838,18 @@ function drawSignals() {
       <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${
         esc(c.model || c.civ_name)}<span class="tags">${tags}</span></div>
       <div class="metric"><label>economy</label>${bar([
+        [(e.food_surplus || 0) / food, "food", `${e.food_surplus || 0} food surplus/turn`],
         [(e.gold_per_turn || 0) / gold, "gold", `${e.gold_per_turn || 0} gold/turn`],
         [(e.science_per_turn || 0) / sci, "sci", `${e.science_per_turn || 0} science/turn`],
         [(e.production_per_turn || 0) / prod, "prod", `${e.production_per_turn || 0} production/turn`],
       ])}</div>
       <div class="metric"><label>army</label>${bar([[units ? military / units : 0, "mil",
         `${military} of ${units} units are military`]])}<span class="n">${military}/${units}</span></div>
+      <div class="metric ${g.fights ? "clickable" : ""}" data-combat="${c.player_id}">
+        <label>combat</label>${bar([
+          [(g.fights - g.wildFights) / fights, "war", `${g.fights - g.wildFights} against rivals`],
+          [g.wildFights / fights, "wild", `${g.wildFights} against the wilderness`],
+        ])}<span class="n">${g.kills}/${g.losses}</span></div>
       <div class="metric"><label>talk</label>${bar([
         [(g.said - g.dm) / talk, "pub", `${g.said - g.dm} public`],
         [g.dm / talk, "dm", `${g.dm} private`],
@@ -778,6 +864,39 @@ function drawSignals() {
 
   const pressure = rows.reduce((a, { g }) => a + g.lostToWild + g.sacked, 0);
   badge("signals", pressure || S.match.civs.length, pressure > 0);
+
+  $("signals").onclick = (ev) => {
+    const row = ev.target.closest("[data-combat]");
+    if (!row) return;
+    const pid = row.dataset.combat;
+    S.combatOf = S.combatOf === pid ? null : pid;
+    drawSignals();
+  };
+  if (S.combatOf) {
+    const g = S.signals?.[S.combatOf];
+    const detail = (g?.log || []).slice().reverse().map((c) => {
+      const foe = c.mine === c.attacker ? c.defender : c.attacker;
+      const attacking = c.mine === c.attacker;
+      const mineDied = attacking ? c.attacker_died : c.defender_died;
+      const theirsDied = attacking ? c.defender_died : c.attacker_died;
+      const mineType = attacking ? c.attacker_type : c.defender_type;
+      const theirType = attacking ? c.defender_type : c.attacker_type;
+      const took = attacking ? c.attacker_damage : c.defender_damage;
+      const dealt = attacking ? c.defender_damage : c.attacker_damage;
+      return `<div class="fight ${mineDied ? "lost" : theirsDied ? "won" : ""}"
+        data-turn="${c.turn}">
+        <span class="meta">turn ${c.turn} · ${attacking ? "attacked" : "was attacked by"}</span>
+        <span class="dot" style="background:${cssOf(foe)}"></span>${esc(nameOf(foe))}
+        <div>${esc(mineType)} vs ${esc(theirType)} · dealt ${dealt}, took ${took}${
+          theirsDied ? " · <b class=\"k pub\">killed them</b>" : ""}${
+          mineDied ? " · <b class=\"k mil\">lost the unit</b>" : ""}</div></div>`;
+    }).join("") || `<div class="empty">No fights yet.</div>`;
+    $("signals").insertAdjacentHTML("beforeend",
+      `<div class="fights"><div class="who"><span class="dot"
+        style="background:${cssOf(S.combatOf)}"></span>${esc(nameOf(S.combatOf))} ·
+        every fight so far <button class="thread" data-combat="${S.combatOf}">close</button>
+        </div>${detail}</div>`);
+  }
 }
 
 /**
@@ -805,12 +924,24 @@ async function drawDiplomacy(relationLines) {
   }
   if (!visible.some(([key]) => key === S.thread)) S.thread = visible[0][0];
 
+  const chip = (pid) =>
+    `<span class="dot" style="background:${cssOf(pid)}"></span>${esc(nameOf(pid))}`;
   const tabs = visible.map(([key, list]) => {
-    const label = key === "public" ? "public"
-      : key.split("|").map((p) => nameOf(p)).join(" ↔ ");
-    const sofar = list.filter((m) => m.turn <= S.turn).length;
+    const sofar = list.filter((m) => m.turn <= S.turn);
+    let label;
+    if (key === "public") {
+      label = "public";
+    } else {
+      // Ordered by who opened it, with a single arrow. A double arrow said
+      // "these two spoke" and threw away the more interesting half - who went
+      // first. The dots carry the same colours as the board and every other
+      // panel, so a thread can be tied to a civ without reading the name.
+      const opener = (sofar[0] || list[0]).from;
+      const other = key.split("|").find((p) => p !== opener) || opener;
+      label = `${chip(opener)} <span class="arrow">→</span> ${chip(other)}`;
+    }
     return `<button class="thread" data-key="${key}" aria-pressed="${key===S.thread}"
-      >${esc(label)} <span class="meta">${sofar}</span></button>`;
+      >${label} <span class="meta">${sofar.length}</span></button>`;
   }).join("");
 
   // Up to and including this turn, never past it. Threading the whole match at
@@ -822,10 +953,13 @@ async function drawDiplomacy(relationLines) {
   const upToNow = (threads.get(S.thread) || []).filter((m) => m.turn <= S.turn);
   const body = upToNow.length ? upToNow.map((m) => {
     return `<div class="msg ${m.channel} ${m.turn===S.turn?"now":""}" data-turn="${m.turn}">
-      <div class="meta">turn ${m.turn} · ${nameOf(m.from)}${
-        m.to ? ` → ${nameOf(m.to)}` : " · public"}</div>${esc(m.text)}
+      <div class="meta"><span class="chan ${m.channel}">${
+        m.channel === "private" ? "private" : "public"}</span> turn ${m.turn} ·
+        <span class="dot" style="background:${cssOf(m.from)}"></span>${nameOf(m.from)}${
+        m.to ? ` → <span class="dot" style="background:${cssOf(m.to)}"></span>${nameOf(m.to)}`
+             : " · to everyone"}</div>${esc(m.text)}
       ${m.turn === S.turn && f_reasoning(m.from) ? `<div class="aside">
-        <b>privately, the same turn:</b> ${esc(f_reasoning(m.from))}</div>` : ""}</div>`;
+        <b>its plan that turn:</b> ${esc(f_reasoning(m.from))}</div>` : ""}</div>`;
   }).join("") : `<div class="empty">Nothing said in this thread yet.</div>`;
 
   $("messages").innerHTML = `<div class="threads">${tabs}</div>${body}` +

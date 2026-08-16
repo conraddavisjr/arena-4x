@@ -809,8 +809,18 @@ def _attack(s: State, player_id: str, order, out: list[Event]) -> None:  # noqa:
             actor=player_id,
             attacker=attacker.id,
             defender=defender.id,
+            # Who was on the receiving end, and what both sides were. `actor` is
+            # the attacker, so without these a spectator can see that a fight
+            # happened and not who it was with - which is most of what makes a
+            # fight worth reporting. It also lets losses to the wilderness be
+            # told apart from losses to a rival without parsing the text.
+            defender_owner=defender.owner,
+            attacker_type=attacker.type.value,
+            defender_type=defender.type.value,
             attacker_damage=result.attacker_damage,
             defender_damage=result.defender_damage,
+            attacker_died=result.attacker_died,
+            defender_died=result.defender_died,
         )
     )
 

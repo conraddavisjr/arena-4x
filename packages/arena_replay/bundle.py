@@ -213,6 +213,11 @@ def turn_frame(
             }
             for key, rel in sorted(state.relations.items())
         },
+        # Combat, structured. The event ticker can say a fight happened; only
+        # this can say who fought, what it cost and who is bleeding. It is what
+        # turns "haiku suddenly lost half its army on turn 15" from something
+        # you notice by accident into something the panel tells you.
+        "combat": _combat(events),
         "reasoning": _reasoning(events),
         "messages": _messages(state, events),
         "events": [
@@ -231,6 +236,28 @@ def turn_frame(
 # Event types that would swamp the ticker without telling a spectator anything.
 # Movement is already visible on the board; rejected orders are debugging detail.
 _NOISE = frozenset({"turn_started", "turn_ended", "unit_moved", "order_rejected", "agent_action"})
+
+
+def _combat(events: list[Event]) -> list[dict[str, Any]]:
+    """Every blow struck this turn, with both sides named."""
+    out: list[dict[str, Any]] = []
+    for e in events:
+        if e.type != "combat_resolved" or "attacker_type" not in e.payload:
+            continue
+        out.append(
+            {
+                "attacker": e.actor,
+                "defender": e.payload.get("defender_owner"),
+                "attacker_type": e.payload.get("attacker_type"),
+                "defender_type": e.payload.get("defender_type"),
+                "attacker_damage": e.payload.get("attacker_damage", 0),
+                "defender_damage": e.payload.get("defender_damage", 0),
+                "attacker_died": bool(e.payload.get("attacker_died")),
+                "defender_died": bool(e.payload.get("defender_died")),
+                "text": e.text,
+            }
+        )
+    return out
 
 
 def _reasoning(events: list[Event]) -> dict[str, Any]:

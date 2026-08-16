@@ -37,7 +37,26 @@ from arena_orchestrator.config import RunConfig, Seat  # noqa: E402
 from arena_orchestrator.dryrun import bot_seats  # noqa: E402
 from arena_orchestrator.loop import Orchestrator  # noqa: E402
 
+# Flavour names, used only when a seat has no model to name it after - the
+# bot-driven dry run.
 CIVS = ["Aurelian Compact", "Iron Concord", "Verdant Pact", "Solari Dominion"]
+
+
+def civ_name(index: int, provider: str, model: str | None) -> str:
+    """What the agents call each other.
+
+    The model id, deliberately. It goes into the system prompt and into every
+    message an agent writes, so "Greetings Iron Concord" becomes "Greetings
+    gpt-5.4-mini" and a transcript can be read without a decoder ring.
+
+    Worth being explicit that this is a choice with a cost: every agent now
+    knows which model it is and which models it faces. Whether a model plays
+    differently knowing it is Opus facing Grok is a real question, and this
+    setting answers it in one direction. Run with `CIVS` names instead for the
+    other.
+    """
+    return model or (CIVS[index] if provider == "bot" else provider)
+
 
 PROVIDERS = ("anthropic", "openai", "google", "xai")
 
@@ -96,7 +115,12 @@ KEYS = {
 
 def build_config(args: argparse.Namespace) -> RunConfig:
     seats = tuple(
-        Seat(player_id=f"p{i + 1}", civ_name=CIVS[i], provider=provider, model=model)
+        Seat(
+            player_id=f"p{i + 1}",
+            civ_name=civ_name(i, provider, model),
+            provider=provider,
+            model=model,
+        )
         for i, (provider, model) in enumerate(roster_for(args.roster))
     )
     # The throttle exists to protect a vendor account. A dry run has no vendor,
