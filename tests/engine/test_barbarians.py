@@ -127,7 +127,7 @@ def test_turn_rotation_excludes_the_faction() -> None:
 def test_legal_actions_never_offers_the_faction_as_a_diplomatic_partner() -> None:
     state = fresh()
     diplo = legal_actions(state, "p1")["diplomacy"]
-    for key in ("can_message", "can_propose_to", "can_declare_war_on"):
+    for key in ("send_message", "propose", "declare_war"):
         assert BARBARIAN_ID not in diplo[key], f"{key} offered the wilderness"
 
 

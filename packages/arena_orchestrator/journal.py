@@ -42,6 +42,8 @@ TURN_RESOLVED = "turn_resolved"
 AGENT_CALL = "agent_call"
 AGENT_FAILURE = "agent_failure"
 PARSE_REPAIRED = "parse_repaired"
+PROVIDER_RETRY = "provider_retry"
+THROTTLED = "throttled"
 BUDGET_UPDATED = "budget_updated"
 MATCH_ENDED = "match_ended"
 

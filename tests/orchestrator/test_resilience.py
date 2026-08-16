@@ -354,3 +354,20 @@ async def test_retry_and_breaker_compose_into_a_pass_rather_than_a_crash() -> No
     before = len(clock.slept)
     assert await take_turn() is None
     assert len(clock.slept) == before
+
+
+async def test_the_bucket_records_how_long_it_made_callers_wait() -> None:
+    """Throttling is invisible otherwise. It produces no errors and no retries -
+    it just makes a match take longer, and "the run is slow" is not a diagnosis
+    you can act on. The accumulator is what the loop journals per turn."""
+    clock = FakeTime()
+    bucket = TokenBucket(60, 1_000_000, clock=clock, sleep=clock.sleep)
+
+    for _ in range(60):
+        await bucket.acquire(0)
+    assert bucket.waited_s == 0.0
+
+    await bucket.acquire(0)
+    await bucket.acquire(0)
+    assert bucket.waited_s == pytest.approx(2.0)
+    assert bucket.waited_s == pytest.approx(sum(clock.slept))

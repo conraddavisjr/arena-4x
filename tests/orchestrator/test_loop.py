@@ -411,3 +411,54 @@ async def test_a_moved_run_directory_still_resumes(tmp_path: Path) -> None:
 
     result = await make_orchestrator(moved, make_config(turns=8)).run(resume=True)
     assert result.state.state_hash() == records(original, jl.TURN_RESOLVED)[-1]["state_hash"]
+
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+
+class Flaky:
+    """Fails a fixed number of times per turn, then succeeds."""
+
+    name = "flaky"
+    model = "claude-haiku-4-5"
+
+    def __init__(self, failures_per_turn: int = 2):
+        self._budget = failures_per_turn
+        self._left = failures_per_turn
+        self.calls = 0
+
+    async def complete(self, system, user, schema):
+        self.calls += 1
+        if self._left:
+            self._left -= 1
+            raise Overloaded("529")
+        self._left = self._budget
+        return Turn(
+            text=json.dumps({"orders": []}),
+            usage=Usage(output_tokens=10),
+            model=self.model,
+            latency_ms=1,
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_a_retry_the_ladder_absorbed_is_still_recorded(tmp_path: Path) -> None:
+    """The blind spot this closes. A 429 that the retry ladder swallowed used to
+    leave no trace at all: the turn succeeded, nothing was journalled, and a
+    provider rate-limiting every single call looked identical to a healthy one.
+    The only symptom was a run that took longer than it should, and "the run is
+    slow" is not a diagnosis."""
+    client = Flaky(failures_per_turn=2)
+    await make_orchestrator(tmp_path, make_config(turns=3), clients={"p2": client}).run()
+
+    retries = records(tmp_path, jl.PROVIDER_RETRY)
+    assert len(retries) == 6  # two absorbed per turn, three turns
+    assert {r["player_id"] for r in retries} == {"p2"}
+    assert {r["error"] for r in retries} == {"Overloaded"}
+    assert all(r["delay_s"] >= 0 for r in retries)
+    # And the turn still succeeded, which is the point of absorbing it.
+    assert not records(tmp_path, jl.AGENT_FAILURE)

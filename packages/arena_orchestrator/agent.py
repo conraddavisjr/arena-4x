@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,6 +71,11 @@ class Agent:
     # it a test that proves a dead provider does not sink the match has to sit
     # through the real backoff ladder, which is forty seconds a case.
     sleep: Sleeper = asyncio.sleep
+    # Called for every retry that happens *inside* a turn. Without it a 429 that
+    # the ladder absorbed leaves no trace at all - the turn succeeds, nothing is
+    # journalled, and a provider that is rate-limiting us on every single call
+    # looks identical to one that is not.
+    on_retry: Callable[[ProviderError, int, float], None] | None = None
     # The action schema in the dialect this seat's vendor accepts. Held per
     # agent rather than passed per turn because it never changes and, on
     # Anthropic, it is not the same bytes the other seats are sent.
@@ -107,6 +113,7 @@ class Agent:
                     lambda: self.client.complete(self.system, p, self.schema),
                     policy=self.retry,
                     sleep=self.sleep,
+                    on_retry=self.on_retry,
                 ),
                 provider=self.client.name,
             )

@@ -71,6 +71,10 @@ class TokenBucket:
         self._tokens = float(tokens_per_minute)
         self._last = clock()
         self._lock = asyncio.Lock()
+        # Total seconds this bucket has made callers wait. Throttling is
+        # invisible otherwise: it costs no errors and no retries, it just makes
+        # a match take longer, and "the run is slow" is not a diagnosis.
+        self.waited_s = 0.0
 
     def _refill(self) -> None:
         now = self._clock()
@@ -104,6 +108,7 @@ class TokenBucket:
                     self._requests -= 1
                     self._tokens -= tokens
                     return
+                self.waited_s += delay
                 await self._sleep(delay)
 
 

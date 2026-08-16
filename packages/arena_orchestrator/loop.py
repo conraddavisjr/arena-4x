@@ -79,6 +79,8 @@ class Orchestrator:
     # stream for the whole board, so this is the per-agent slice - a civ should
     # be told its own warrior died, not everybody's.
     _recent: dict[str, list[str]] = field(default_factory=dict)
+    # Retries absorbed since the last turn boundary, drained into the journal.
+    _retries: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.schema:
@@ -112,7 +114,24 @@ class Orchestrator:
                 timeout_s=self.config.turn_timeout_s,
                 history_size=self.config.reasoning_history,
                 sleep=self.sleep,
+                on_retry=self._note_retry(seat.player_id, seat.provider),
             )
+
+    def _note_retry(self, player_id: str, provider: str):
+        """Record a retry the ladder absorbed, so it is not invisible."""
+
+        def note(error: Exception, attempt: int, delay: float) -> None:
+            self._retries.append(
+                {
+                    "player_id": player_id,
+                    "provider": provider,
+                    "error": type(error).__name__,
+                    "attempt": attempt,
+                    "delay_s": round(delay, 2),
+                }
+            )
+
+        return note
 
     def _bucket(self, provider: str) -> TokenBucket:
         if provider not in self._buckets:
@@ -168,6 +187,12 @@ class Orchestrator:
                 if self.after_turn:
                     self.after_turn(state)
 
+                for note in self._retries:
+                    journal.append(jl.PROVIDER_RETRY, state.turn, **note)
+                self._retries.clear()
+                waited = {p: round(b.waited_s, 1) for p, b in self._buckets.items() if b.waited_s}
+                if waited:
+                    journal.append(jl.THROTTLED, state.turn, seconds_by_provider=waited)
                 journal.append(
                     jl.TURN_RESOLVED,
                     state.turn,

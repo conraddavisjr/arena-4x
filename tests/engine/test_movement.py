@@ -269,8 +269,8 @@ def test_legal_actions_separates_embark_from_ordinary_moves() -> None:
     state = sea_state()
     unit = put(state, "p1", UnitType.WARRIOR, LAND)
     options = legal_actions(state, "p1")["units"][unit.id]
-    assert SHORE.to_key() in options["embark"]
-    assert SHORE.to_key() not in options["move"], (
+    assert SHORE.to_key() in options["move_unit_embarking"]
+    assert SHORE.to_key() not in options["move_unit"], (
         "a crossing is a commitment and should not look like an ordinary step"
     )
     assert options["embarked"] is False
@@ -280,14 +280,14 @@ def test_legal_actions_offers_no_embark_without_sailing() -> None:
     state = sea_state(sailing=False)
     unit = put(state, "p1", UnitType.WARRIOR, LAND)
     options = legal_actions(state, "p1")["units"][unit.id]
-    assert options["embark"] == []
+    assert options["move_unit_embarking"] == []
 
 
 def test_legal_actions_offers_disembark_only_when_at_sea() -> None:
     state = sea_state()
     unit = put(state, "p1", UnitType.WARRIOR, DEEP, embarked=True)
     options = legal_actions(state, "p1")["units"][unit.id]
-    assert FAR_SHORE.to_key() in options["disembark"]
+    assert FAR_SHORE.to_key() in options["move_unit_landing"]
     assert options["embarked"] is True
     assert not options["fortify"], "a unit at sea cannot dig in"
 
@@ -299,7 +299,7 @@ def test_every_offered_move_is_accepted_by_the_reducer(embarked: bool) -> None:
     unit = put(state, "p1", UnitType.WARRIOR, DEEP if embarked else LAND, embarked=embarked)
     options = legal_actions(state, "p1")["units"][unit.id]
 
-    for key in options["move"] + options["embark"] + options["disembark"]:
+    for key in options["move_unit"] + options["move_unit_embarking"] + options["move_unit_landing"]:
         trial = state.model_copy(deep=True)
         trial, events = act(trial, "p1", MoveUnit(action="move_unit", unit_id=unit.id, to=key))
         assert not rejections(events), f"legal move {key} was rejected: {rejections(events)}"
