@@ -91,9 +91,12 @@ async def test_a_match_plays_and_writes_everything_downstream_needs(tmp_path: Pa
 
     assert result.state.turn == 8
     assert result.failures == 0
-    # The bundle the viewer reads, written as the match went rather than after.
-    assert (tmp_path / "match.json").exists()
-    assert len(list((tmp_path / "turns").glob("*.json"))) == 8
+    # The bundle the viewer reads, written as the match went rather than after,
+    # and in its own directory so publishing it cannot sweep up the transcripts.
+    assert (tmp_path / "bundle" / "match.json").exists()
+    assert len(list((tmp_path / "bundle" / "turns").glob("*.json"))) == 8
+    assert not list((tmp_path / "bundle").glob("transcripts*"))
+    assert not list((tmp_path / "bundle").glob("journal*"))
     # The journal resume reads, and the transcripts it deliberately does not.
     assert len(records(tmp_path, jl.TURN_RESOLVED)) == 8
     assert len(records(tmp_path, jl.AGENT_CALL)) == 32
@@ -285,8 +288,8 @@ async def test_the_budget_cap_halts_the_match_on_a_scoreable_board(tmp_path: Pat
     assert ended["reason"] == "budget_cap"
     # The board is complete and the bundle is finished, so it can still be
     # scored, replayed and published.
-    assert (tmp_path / "match.json").exists()
-    assert len(list((tmp_path / "turns").glob("*.json"))) == result.state.turn
+    assert (tmp_path / "bundle" / "match.json").exists()
+    assert len(list((tmp_path / "bundle" / "turns").glob("*.json"))) == result.state.turn
 
 
 async def test_spend_is_attributed_per_agent(tmp_path: Path) -> None:

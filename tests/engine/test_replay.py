@@ -166,7 +166,11 @@ def test_the_bundle_carries_no_prompts_or_raw_model_output(bundle) -> None:
     """~20MB of the least interesting data, and the one place a system prompt
     could leak into a published page."""
     root, _ = bundle
-    for path in root.rglob("*.json"):
+    # Every file, not just *.json. This globbed `*.json` and the orchestrator
+    # writes its transcripts to `transcripts.jsonl` - so the one test standing
+    # between a system prompt and a published web page did not look at the file
+    # the system prompt was in.
+    for path in (p for p in root.rglob("*") if p.is_file()):
         text = path.read_text().lower()
         for leak in ("system prompt", "you are the sovereign", "api_key", "anthropic"):
             assert leak not in text, f"{path.name} contains {leak!r}"
@@ -174,7 +178,7 @@ def test_the_bundle_carries_no_prompts_or_raw_model_output(bundle) -> None:
 
 def test_the_bundle_has_no_endpoints_or_credentials(bundle) -> None:
     root, _ = bundle
-    for path in root.rglob("*.json"):
+    for path in (p for p in root.rglob("*") if p.is_file()):
         text = path.read_text()
         assert "http://" not in text and "https://" not in text
         assert "sk-" not in text

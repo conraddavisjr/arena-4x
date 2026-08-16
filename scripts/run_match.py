@@ -133,7 +133,9 @@ async def main() -> None:
     )
     parser.add_argument("--awareness", choices=["off", "tokens"], default="off")
     parser.add_argument(
-        "--timeout", type=float, default=None,
+        "--timeout",
+        type=float,
+        default=None,
         help="seconds before a turn is abandoned and the agent passes",
     )
     parser.add_argument("--out", type=Path, default=None)
@@ -173,7 +175,7 @@ async def main() -> None:
             f"  {seat.civ_name:<20} {points:>6} ${spent:>8.3f} {efficiency:>9.1f}  "
             f"{seat.model or seat.provider}"
         )
-    print(f"\nthen: make view3d MATCH={root}")
+    print(f"\nthen: make view3d MATCH={root}/bundle")
 
 
 if __name__ == "__main__":

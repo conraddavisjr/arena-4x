@@ -82,6 +82,12 @@ class Orchestrator:
     # Retries absorbed since the last turn boundary, drained into the journal.
     _retries: list[dict[str, Any]] = field(default_factory=list)
 
+    @property
+    def bundle_root(self) -> Path:
+        """Where the publishable replay is written. Self-contained by
+        construction, so publishing is a directory copy with nothing to omit."""
+        return self.root / "bundle"
+
     def __post_init__(self) -> None:
         if not self.schema:
             self.schema = json.loads(SCHEMA_PATH.read_text())
@@ -160,7 +166,13 @@ class Orchestrator:
         journal = Journal.open(self.root, resume=bool(recovered))
         match_id = (recovered.match_id if recovered else None) or self.config.match_id
         state, events = new_match(match_id, self.config.seed, self.config.roster, self.config.match)
-        writer = BundleWriter.start(self.root, state) if self.bundle else None
+        # The bundle goes in its own subdirectory, apart from the journal and
+        # the transcripts. Those live in the run root and the bundle is what
+        # gets published - and they were all in one directory, which meant
+        # serving a match served the system prompts with it. The one property
+        # a published match has to have is that it carries nothing but the
+        # match, and "remember to exclude two files" is not that property.
+        writer = BundleWriter.start(self.bundle_root, state) if self.bundle else None
 
         if recovered:
             # Before anything is spent: the cap belongs to the match, not to
