@@ -82,7 +82,10 @@ class AnthropicClient:
         max_tokens: int = 32_000,
         effort: str = "high",
         thinking_display: str | None = "summarized",
-        timeout: float = 180.0,
+        # Just under the orchestrator's per-turn deadline. If the HTTP client
+        # gave up first the turn would be recorded as a transport timeout rather
+        # than as the model taking too long, which are different diagnoses.
+        timeout: float = 400.0,
     ):
         import anthropic
 

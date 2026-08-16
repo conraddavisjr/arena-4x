@@ -134,14 +134,38 @@ async def test_the_real_action_schema_is_accepted(provider: str) -> None:
 
 
 @pytest.mark.contract
-async def test_anthropic_actually_caches_the_system_prefix() -> None:
-    """The single highest-value contract test in the repo.
+@pytest.mark.parametrize(
+    "model",
+    [
+        os.environ.get("ARENA_FLAGSHIP_ANTHROPIC") or "claude-opus-5",
+        os.environ.get("ARENA_SHAKEOUT_ANTHROPIC") or "claude-haiku-4-5",
+    ],
+)
+async def test_anthropic_actually_caches_the_system_prefix(model: str) -> None:
+    """That caching happens at all - not that the breakpoint is well placed.
 
-    A cache miss does not fail anything - it just multiplies the input bill by
-    ten and nothing looks wrong. This is the only way to notice.
+    Worth being exact about what this does and does not cover, because it once
+    passed for a whole live match while every turn wrote a fresh cache entry and
+    read none.
+
+    It covers: the prefix is cacheable, the vendor still honours it, and nothing
+    dynamic has crept into the system block. A regression in any of those
+    multiplies the input bill by ten and fails nothing.
+
+    It does *not* discriminate breakpoint placement. Placing `cache_control` at
+    the top level instead of on the system block was measured writing 6,846
+    tokens on every call and reading none - but only through a non-streaming
+    request. This adapter streams, and through the streaming path both
+    placements read the cache here. Three attempts to make this test tell them
+    apart failed.
+
+    Placement is guarded in two other places instead, and they are the ones to
+    trust: `test_providers.py` asserts the request shape offline on every
+    commit, and the orchestrator journals a `cache_miss` whenever a live turn
+    writes without reading.
     """
     requires("anthropic")
-    client = build("anthropic")
+    client = build("anthropic", model)
     # A nonce, because without one this test passes on a cache entry left by an
     # earlier run and asserts nothing. That is not hypothetical: it is how a
     # misplaced breakpoint survived here while writing a fresh entry on every

@@ -63,7 +63,10 @@ class OpenAIClient:
         # headroom costs nothing, since billing is on tokens produced.
         max_output_tokens: int = 32_000,
         reasoning_effort: str | None = "high",
-        timeout: float = 180.0,
+        # Just under the orchestrator's per-turn deadline. If the HTTP client
+        # gave up first the turn would be recorded as a transport timeout rather
+        # than as the model taking too long, which are different diagnoses.
+        timeout: float = 400.0,
     ):
         import openai
 
@@ -142,7 +145,7 @@ class XAIClient:
         api_key: str | None = None,
         base_url: str = XAI_BASE_URL,
         max_tokens: int = 8_000,
-        timeout: float = 180.0,
+        timeout: float = 400.0,
     ):
         import openai
 

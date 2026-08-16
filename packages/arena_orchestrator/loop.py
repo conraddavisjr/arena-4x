@@ -273,6 +273,21 @@ class Orchestrator:
             )
             journal.transcript(state.turn + 1, player_id, agent.system, user, turn.text)
 
+        # A cache that never reads costs 12.5x the input price of the prefix and
+        # fails nothing. Tests can miss it - one did, for a whole live match -
+        # so the running match checks for itself.
+        if state.turn >= 2 and agent.client.name == "anthropic":
+            for turn in outcome.turns:
+                if turn.usage.cache_read_tokens == 0 and turn.usage.cache_write_tokens > 0:
+                    journal.append(
+                        jl.CACHE_MISS,
+                        state.turn + 1,
+                        player_id=player_id,
+                        wrote=turn.usage.cache_write_tokens,
+                        note="wrote a fresh cache entry instead of reading one; "
+                        "the prefix is varying or the breakpoint is misplaced",
+                    )
+
         if outcome.repaired:
             journal.append(jl.PARSE_REPAIRED, state.turn + 1, player_id=player_id)
         if outcome.failure:

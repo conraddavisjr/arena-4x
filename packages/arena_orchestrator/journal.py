@@ -44,6 +44,7 @@ AGENT_FAILURE = "agent_failure"
 PARSE_REPAIRED = "parse_repaired"
 PROVIDER_RETRY = "provider_retry"
 THROTTLED = "throttled"
+CACHE_MISS = "cache_miss"
 BUDGET_UPDATED = "budget_updated"
 MATCH_ENDED = "match_ended"
 
