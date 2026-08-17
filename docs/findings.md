@@ -362,6 +362,37 @@ turns on one seat at 107s median and ~15,500 output tokens a call. That is a
 model thinking, not a hung request, and cutting it off manufactured exactly the
 vendor bias the limit exists to avoid.
 
+### A timeout costs two turns, not one, and cannot be retried
+
+A completed 20-turn match lost two agent-turns to the 420s deadline: p1 on turn
+7, p4 on turn 19. Both are stranger than they look, because **p1's median
+latency is 18 seconds**. A 23x outlier on a seat that fast is a stalled request,
+not a model thinking.
+
+Two structural problems behind it:
+
+- **The retry has nowhere to run.** Each SDK client is given a 400s timeout,
+  deliberately just under the 420s turn deadline so a hang is classified as a
+  transport timeout rather than an opaque turn failure. But that leaves 20
+  seconds, which is not enough to place a second call. The classification works
+  and the recovery it was meant to enable does not - no `provider_retry` was
+  journalled for either lost turn.
+- **The next turn pays too.** A 420s timeout is seven minutes, and Anthropic's
+  cache TTL is five. So the turn after a timeout necessarily finds a cold
+  prefix and writes a fresh entry at 1.25x instead of reading at 0.1x. The
+  journal shows exactly that: `agent_failure` on turn 7, `cache_miss` on turn 8.
+
+The fix is not simply a smaller SDK timeout. 200s would leave room for a real
+retry, and would also cut off a seat whose median is 109s and whose calls run to
+~15,500 output tokens - manufacturing the vendor bias the 420s exists to
+prevent. The two limits are answering different questions and currently share
+one number. **Left as-is deliberately**: changing timeout policy while a
+comparison run is in flight would invalidate the comparison it is measuring.
+
+Same reason a resume always pays a cache write on its first turn: any gap longer
+than five minutes is a cold prefix. Worth knowing before reading a resumed run's
+cache column and concluding something broke.
+
 ---
 
 ## Two things investigated and one of them deliberately not fixed
