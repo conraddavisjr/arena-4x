@@ -50,6 +50,15 @@ from .resilience import CircuitBreaker, Sleeper, TokenBucket
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json"
 
+# Which adapters read a token stream, and therefore can tell a model thinking
+# from a connection that has stopped talking. Recorded as a set rather than an
+# `if` so the next vendor to gain a stream is an entry here, not a branch - and
+# so that the seats *without* one are visible rather than assumed.
+#
+# Google is the omission. Its interactions surface exposes no token stream, so
+# that seat still depends on the transport timeout and the turn backstop.
+STREAMING_PROVIDERS = frozenset({"anthropic", "openai"})
+
 
 @dataclass
 class MatchResult:
@@ -106,8 +115,14 @@ class Orchestrator:
         self._breakers: dict[str, CircuitBreaker] = {}
         self.agents: dict[str, Agent] = {}
         for seat in self.config.seats:
+            # The stall gap is match policy rather than seat configuration, so it
+            # comes from the run config - but a seat may still override it, and a
+            # vendor whose adapter cannot stream simply does not accept it.
+            options = dict(seat.options)
+            if seat.provider in STREAMING_PROVIDERS:
+                options.setdefault("stall_gap_s", self.config.stall_gap_s)
             client = (self.clients or {}).get(seat.player_id) or build_client(
-                seat.provider, seat.model, **seat.options
+                seat.provider, seat.model, **options
             )
             self.agents[seat.player_id] = Agent(
                 player_id=seat.player_id,
@@ -306,8 +321,17 @@ class Orchestrator:
                 cost_usd=round(cost, 6),
                 latency_ms=turn.latency_ms,
                 stop_reason=turn.stop_reason,
+                # The trace itself goes to the transcripts; its size goes here,
+                # so "is this seat's reasoning being captured at all" is a
+                # question the journal can answer. A seat billing thousands of
+                # reasoning tokens while storing none of them is a real state
+                # and one worth being able to see without opening 80 payloads.
+                reasoning_tokens=turn.usage.reasoning_tokens,
+                thinking_chars=len(turn.thinking or ""),
             )
-            journal.transcript(state.turn + 1, player_id, agent.system, user, turn.text)
+            journal.transcript(
+                state.turn + 1, player_id, agent.system, user, turn.text, turn.thinking
+            )
 
         # A cache that never reads costs 12.5x the input price of the prefix and
         # fails nothing. Tests can miss it - one did, for a whole live match -

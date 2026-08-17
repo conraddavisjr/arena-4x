@@ -82,11 +82,36 @@ class Journal:
         self._log.flush()
         return self._seq
 
-    def transcript(self, turn: int, player_id: str, system: str, user: str, raw: str) -> None:
+    def transcript(
+        self,
+        turn: int,
+        player_id: str,
+        system: str,
+        user: str,
+        raw: str,
+        thinking: str | None = None,
+    ) -> None:
         """The forensic record: exactly what was sent, exactly what came back.
 
         Never read by resume, never included in a published bundle. It is here
         so that "why did p3 do that on turn 47" is answerable months later.
+
+        `thinking` is the model's reasoning trace, which is a different artifact
+        from the `reasoning` block in `raw`. That block is the account the model
+        writes *for the record*, knowing it will be read and handed back; this is
+        the deliberation behind it. Every seat was already paying for these
+        tokens - they are billed as output and counted in `reasoning_tokens` -
+        and the adapters were already parsing them out of the response. Nothing
+        stored them, so on every turn of every match they were bought and thrown
+        away.
+
+        Kept here rather than in the bundle for the same reason the prompts are:
+        a published match should carry the match and nothing else. Vendors also
+        differ on what they will even show - Anthropic returns summarised
+        thinking blocks, OpenAI returns reasoning summaries only if asked,
+        xAI puts a trace on the message, and Google's interactions surface
+        exposes no thought text at all while still billing for it - so an
+        absent trace here means "not offered", not "did not think".
         """
         self._transcripts.write(
             json.dumps(
@@ -96,6 +121,7 @@ class Journal:
                     "system": system,
                     "user": user,
                     "raw": raw,
+                    **({"thinking": thinking} if thinking else {}),
                 },
                 separators=(",", ":"),
             )

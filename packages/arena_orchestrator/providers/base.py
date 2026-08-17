@@ -25,8 +25,12 @@ the orchestrator extra must not be a precondition for running the engine tests.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,10 +89,17 @@ class Turn:
     model: str
     latency_ms: int
     stop_reason: str | None = None
-    # Summarised reasoning, where the vendor exposes it at all. Anthropic needs
-    # `thinking.display` set to return any; OpenAI and Google currently return
-    # none, so this is None for them and the reasoning the lab actually studies
-    # is the `reasoning` block the schema requires in the response body.
+    # Summarised reasoning, where the vendor exposes it at all, and the vendors
+    # differ sharply. Anthropic returns thinking blocks once `thinking.display`
+    # is set; OpenAI returns reasoning summaries only if the request asks for
+    # them; xAI hangs a `reasoning_content` field off the message as an
+    # extension to a shared schema; Google's interactions surface bills thought
+    # tokens and exposes no thought text at all.
+    #
+    # So None here means "this vendor did not offer one", never "the model did
+    # not think". Distinct from the `reasoning` block the action schema requires,
+    # which is the account a model writes knowing it will be read - this is the
+    # deliberation behind that account.
     thinking: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -153,6 +164,24 @@ class Timeout(ProviderError):
     retryable = True
 
 
+class Stalled(Timeout):
+    """A streaming response went silent mid-flight.
+
+    Distinguished from `Timeout` because the two say different things and the
+    difference is the whole point. A `Timeout` means "this took longer than we
+    allow", which on a model that thinks for two minutes is often a statement
+    about our patience rather than about the vendor. A `Stalled` means the
+    connection stopped producing bytes while we were still reading it, which no
+    amount of patience fixes and which a retry usually does.
+
+    Two matches lost turns to a total deadline that could not tell these apart:
+    a seat whose median latency is 23 seconds sat at the 420-second cap twice in
+    a row, and it was recorded exactly as a slow model would have been.
+    """
+
+    retryable = True
+
+
 class Malformed(ProviderError):
     """A 200 whose body is not usable: truncated mid-JSON, or empty content.
 
@@ -175,3 +204,44 @@ class Refused(ProviderError):
 
 class FatalProviderError(ProviderError):
     """Bad key, bad model id, malformed request. Retrying cannot help."""
+
+
+async def unstalled(
+    events: AsyncIterator[T],
+    *,
+    gap_s: float,
+    provider: str = "",
+) -> AsyncIterator[T]:
+    """Pass a stream through, raising `Stalled` if it goes quiet for `gap_s`.
+
+    This exists because a total-duration timeout is the wrong instrument for
+    the job it was doing. A cap on how long a turn may take cannot distinguish
+    a model thinking hard from a connection that died with the socket open, and
+    the two need opposite responses: wait, and give up immediately.
+
+    Both matches so far lost turns to that confusion. The seat that hung has a
+    median latency of 23 seconds and sat at the 420-second cap twice in a row -
+    obviously a stall, recorded identically to a slow model, and its score came
+    in last as a result. Meanwhile the *fix* for the previous version of this
+    problem had been to raise the cap from 180s to 420s, because at 180s a seat
+    thinking legitimately for two minutes lost five turns out of seven. Every
+    setting was wrong for one case or the other.
+
+    Time between events answers both at once. A model streaming tokens is alive
+    however long it takes; a stream silent for a minute and a half is not going
+    to speak again. So a long thinker is never truncated and a hang is caught in
+    a fraction of the time, which finally leaves room inside the turn for the
+    retry that a hang actually needs.
+
+    Wraps the iterator rather than replacing it, so an adapter keeps its own
+    handling of usage, refusals and stop reasons untouched - the parts most
+    likely to break if streaming were rebuilt around this.
+    """
+    iterator = events.__aiter__()
+    while True:
+        try:
+            yield await asyncio.wait_for(iterator.__anext__(), timeout=gap_s)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as error:
+            raise Stalled(f"stream produced nothing for {gap_s:.0f}s", provider=provider) from error

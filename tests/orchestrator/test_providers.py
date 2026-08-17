@@ -120,6 +120,16 @@ def anthropic_client(monkeypatch: pytest.MonkeyPatch):
             async def __aexit__(self, *exc):
                 return False
 
+            # The adapter drains the events before asking for the assembled
+            # message, so that the stall guard has something to measure. A stub
+            # that is only awaitable would not exercise that path at all.
+            def __aiter__(self):
+                async def events():
+                    for kind in ("message_start", "content_block_delta", "message_stop"):
+                        yield Bag(type=kind)
+
+                return events()
+
             async def get_final_message(self):
                 return message
 
@@ -249,6 +259,41 @@ def fake_openai_sdk() -> types.ModuleType:
     return module
 
 
+def responses_stub(response, *, seen: dict | None = None, error: Exception | None = None):
+    """A stand-in for `client.responses`, offering the streaming surface.
+
+    The adapter streams so that a dead connection is caught by silence rather
+    than by the turn deadline, so a stub that only implements `create` tests a
+    path production no longer takes.
+    """
+
+    class Stream:
+        def __init__(self, **request):
+            self._request = request
+
+        async def __aenter__(self):
+            if seen is not None:
+                seen.update(self._request)
+            if error is not None:
+                raise error
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def __aiter__(self):
+            async def events():
+                for kind in ("response.created", "response.output_text.delta"):
+                    yield Bag(type=kind)
+
+            return events()
+
+        async def get_final_response(self):
+            return response
+
+    return Bag(stream=lambda **kw: Stream(**kw), close=_noop)
+
+
 async def test_openai_uses_the_responses_api_not_chat_completions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -260,21 +305,18 @@ async def test_openai_uses_the_responses_api_not_chat_completions(
     client = OpenAIClient(api_key="x")
     seen: dict[str, Any] = {}
 
-    async def create(**request):
-        seen.update(request)
-        return Bag(
-            output_text='{"orders": []}',
-            status="completed",
-            output=[],
-            usage=Bag(
-                input_tokens=6000,
-                output_tokens=1500,
-                input_tokens_details=Bag(cached_tokens=5800),
-                output_tokens_details=Bag(reasoning_tokens=900),
-            ),
-        )
-
-    client._client = Bag(responses=Bag(create=create), close=_noop)
+    response = Bag(
+        output_text='{"orders": []}',
+        status="completed",
+        output=[Bag(type="reasoning", summary=[Bag(text="weighing the east")])],
+        usage=Bag(
+            input_tokens=6000,
+            output_tokens=1500,
+            input_tokens_details=Bag(cached_tokens=5800),
+            output_tokens_details=Bag(reasoning_tokens=900),
+        ),
+    )
+    client._client = Bag(responses=responses_stub(response, seen=seen), close=_noop)
     turn = await client.complete("system", "user", SCHEMA)
 
     assert seen["text"]["format"]["type"] == "json_schema"
@@ -284,6 +326,10 @@ async def test_openai_uses_the_responses_api_not_chat_completions(
     assert turn.usage.reasoning_tokens == 900
     # Reasoning is inside the output count; it must not be added on top.
     assert turn.usage.output_tokens == 1500
+    # The summary has to be *requested* or the reasoning items come back empty
+    # and the trace is billed, spent and discarded.
+    assert seen["reasoning"]["summary"] == "auto"
+    assert turn.thinking == "weighing the east", "the trace was parsed and dropped"
 
 
 async def test_openai_surfaces_a_refusal_block(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -293,15 +339,13 @@ async def test_openai_surfaces_a_refusal_block(monkeypatch: pytest.MonkeyPatch) 
 
     client = OpenAIClient(api_key="x")
 
-    async def create(**request):
-        return Bag(
-            output_text="",
-            status="completed",
-            output=[Bag(content=[Bag(type="refusal", refusal="cannot help")])],
-            usage=Bag(),
-        )
-
-    client._client = Bag(responses=Bag(create=create), close=_noop)
+    response = Bag(
+        output_text="",
+        status="completed",
+        output=[Bag(content=[Bag(type="refusal", refusal="cannot help")])],
+        usage=Bag(),
+    )
+    client._client = Bag(responses=responses_stub(response), close=_noop)
     with pytest.raises(Refused, match="cannot help"):
         await client.complete("system", "user", SCHEMA)
 

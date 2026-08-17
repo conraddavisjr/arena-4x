@@ -17,10 +17,16 @@ Pointing the Responses API at xAI's base URL would fail, and pretending xAI is
 confusing 404 in the middle of a flagship run. Both share error translation and
 nothing else.
 
-Neither vendor currently returns reasoning text, only a count of reasoning
-tokens, so `Turn.thinking` is None for both. The reasoning this lab studies
-comes from the `reasoning` block the action schema requires in the body, which
-is why that block is required rather than optional.
+Both return reasoning text, and neither does so by default. OpenAI needs
+`reasoning.summary` requested or the reasoning items come back with an empty
+summary list - billed, spent, discarded. xAI hangs a `reasoning_content` field
+off the message, which is a vendor extension to a shared schema and therefore
+absent from the SDK's typed model, so it is read by name.
+
+That is separate from the `reasoning` block the action schema requires in the
+body. The block is the account a model writes knowing it will be read and handed
+back next turn; the trace is the deliberation behind it. Both are worth keeping
+and they are not the same evidence.
 """
 
 from __future__ import annotations
@@ -39,6 +45,7 @@ from .base import (
     Timeout,
     Turn,
     Usage,
+    unstalled,
 )
 
 XAI_BASE_URL = "https://api.x.ai/v1"
@@ -63,10 +70,11 @@ class OpenAIClient:
         # headroom costs nothing, since billing is on tokens produced.
         max_output_tokens: int = 32_000,
         reasoning_effort: str | None = "high",
-        # Just under the orchestrator's per-turn deadline. If the HTTP client
-        # gave up first the turn would be recorded as a transport timeout rather
-        # than as the model taking too long, which are different diagnoses.
+        # The transport backstop, for a connection that never opens. A stream
+        # that opens and then dies is caught by the gap below, far sooner.
         timeout: float = 400.0,
+        # How long the stream may say nothing before it is treated as dead.
+        stall_gap_s: float = 90.0,
     ):
         import openai
 
@@ -75,6 +83,7 @@ class OpenAIClient:
         self.model = model
         self._max_output_tokens = max_output_tokens
         self._reasoning_effort = reasoning_effort
+        self._stall_gap_s = stall_gap_s
 
     async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
         request: dict[str, Any] = {
@@ -92,11 +101,29 @@ class OpenAIClient:
             },
         }
         if self._reasoning_effort:
-            request["reasoning"] = {"effort": self._reasoning_effort}
+            # `summary` has to be asked for. Without it the reasoning items come
+            # back with an empty `summary` list and the trace is billed, spent
+            # and discarded - which is what was happening: the tokens showed up
+            # in `reasoning_tokens` and the thinking behind them went nowhere.
+            # It is a summary rather than the raw chain, because the raw chain is
+            # not offered on this surface at all.
+            request["reasoning"] = {"effort": self._reasoning_effort, "summary": "auto"}
 
         started = time.monotonic()
         try:
-            response = await self._client.responses.create(**request)
+            # Streamed for the stall guard, not for the tokens. This seat has the
+            # highest median latency of the four and it has hung at the turn
+            # deadline as well, which is the pairing a total-duration cap handles
+            # worst: any value low enough to catch the hang truncates the normal
+            # case. Silence between events separates them.
+            #
+            # `get_final_response()` returns the same assembled object
+            # `create()` did, so status, refusal, usage and reasoning parsing
+            # below are untouched.
+            async with self._client.responses.stream(**request) as stream:
+                async for _ in unstalled(stream, gap_s=self._stall_gap_s, provider=self.name):
+                    pass
+                response = await stream.get_final_response()
         except Exception as error:  # noqa: BLE001 - translated below, never swallowed
             raise _translate(error, self._sdk, self.name) from error
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -127,10 +154,30 @@ class OpenAIClient:
             model=self.model,
             latency_ms=latency_ms,
             stop_reason=getattr(response, "status", None),
+            thinking=_reasoning_of(response),
         )
 
     async def aclose(self) -> None:
         await self._client.close()
+
+
+def _reasoning_of(response: Any) -> str | None:
+    """The reasoning summaries, joined, or None.
+
+    Reasoning arrives as its own item type in `output` rather than as a field on
+    the response, and each item carries a list of summary parts. Read defensively
+    because a model may return no reasoning item at all, and because whether the
+    summaries are populated depends on the request having asked for them.
+    """
+    parts: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) != "reasoning":
+            continue
+        for chunk in getattr(item, "summary", None) or []:
+            text = getattr(chunk, "text", "")
+            if text:
+                parts.append(text)
+    return "\n\n".join(parts) or None
 
 
 class XAIClient:
@@ -200,6 +247,11 @@ class XAIClient:
             model=self.model,
             latency_ms=latency_ms,
             stop_reason=choice.finish_reason,
+            # xAI returns its trace as `reasoning_content` on the message. That
+            # field is not in the OpenAI SDK's typed model - it is a vendor
+            # extension riding a shared schema - so it is read by name and
+            # tolerated absent rather than declared.
+            thinking=getattr(choice.message, "reasoning_content", None) or None,
         )
 
     async def aclose(self) -> None:

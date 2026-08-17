@@ -41,12 +41,14 @@ class ScriptedClient:
         model: str = SCRIPTED_MODEL,
         failures: Iterable[ProviderError] = (),
         latency_ms: int = 0,
+        thinking: str | None = "scripted deliberation",
     ):
         self.model = model
         self._callable = responses if callable(responses) else None
         self._queue = deque(responses) if not callable(responses) else deque()
         self._failures = deque(failures)
         self._latency_ms = latency_ms
+        self._thinking = thinking
         self.calls: list[tuple[str, str]] = []
 
     async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
@@ -77,6 +79,11 @@ class ScriptedClient:
             model=self.model,
             latency_ms=self._latency_ms,
             stop_reason="end_turn",
+            # A stand-in trace, so the persistence path is exercised offline.
+            # Without it the only test of "is thinking stored" would be a live
+            # one, which is how the storing came to be missing in the first
+            # place: three adapters parsed a trace and nothing carried it.
+            thinking=self._thinking,
         )
 
     async def aclose(self) -> None:

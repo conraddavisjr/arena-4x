@@ -12,6 +12,8 @@ on day two, and by then the only evidence is the absence of turns.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from arena_orchestrator.providers.base import (
@@ -371,3 +373,70 @@ async def test_the_bucket_records_how_long_it_made_callers_wait() -> None:
     await bucket.acquire(0)
     assert bucket.waited_s == pytest.approx(2.0)
     assert bucket.waited_s == pytest.approx(sum(clock.slept))
+
+
+# ---------------------------------------------------------------------------
+# Stall detection
+# ---------------------------------------------------------------------------
+
+
+async def test_a_stream_that_goes_quiet_is_abandoned_and_retryable() -> None:
+    """The failure two matches lost turns to, caught in a fraction of the time."""
+    from arena_orchestrator.providers.base import Stalled, unstalled
+
+    async def dies_after_two():
+        yield "a"
+        yield "b"
+        await asyncio.sleep(30)  # never arrives within the gap
+        yield "c"
+
+    seen = []
+    with pytest.raises(Stalled, match="produced nothing"):
+        async for item in unstalled(dies_after_two(), gap_s=0.02, provider="anthropic"):
+            seen.append(item)
+    assert seen == ["a", "b"], "everything up to the stall is still delivered"
+
+
+async def test_a_slow_but_living_stream_is_never_truncated() -> None:
+    """The property a total-duration cap cannot have.
+
+    Total elapsed time here is well past the gap; no single silence is. That is
+    the whole point: a model reasoning for five minutes streams the entire time,
+    so it costs nothing, while a socket that stops talking is caught at once.
+    Every setting of the old total cap was wrong for one case or the other.
+    """
+    from arena_orchestrator.providers.base import unstalled
+
+    async def slow():
+        for n in range(12):
+            await asyncio.sleep(0.01)
+            yield n
+
+    got = [n async for n in unstalled(slow(), gap_s=0.05)]
+    assert got == list(range(12))
+
+
+async def test_a_stall_is_a_timeout_so_the_ladder_already_retries_it() -> None:
+    """Classification, not a new code path. `Stalled` subclasses `Timeout`, so
+    the existing retry policy picks it up without knowing it exists - and the
+    journal can still tell a hang apart from a model that thought too long."""
+    from arena_orchestrator.providers.base import Stalled, Timeout
+
+    error = Stalled("quiet", provider="anthropic")
+    assert isinstance(error, Timeout)
+    assert error.retryable is True
+
+    calls = 0
+
+    async def flaky():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise Stalled("quiet", provider="anthropic")
+        return "recovered"
+
+    assert (
+        await with_retry(flaky, policy=RetryPolicy(attempts=3), sleep=FakeTime().sleep)
+        == "recovered"
+    )
+    assert calls == 2

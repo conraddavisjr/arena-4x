@@ -323,6 +323,40 @@ Two adjacent facts, both of which look like bugs and are not:
 
 ---
 
+## Every match bought its models' reasoning and threw it away
+
+Reasoning tokens are billed as output. They were counted, priced, and paid for
+on every turn of every match - and the trace behind them was parsed out of the
+response by the adapter and then dropped, because nothing downstream stored it.
+The Anthropic adapter's own docstring said the text "matters more here than in
+most applications, because reading the model's reasoning is the entire
+experiment", four lines above the code that discarded it.
+
+Traces now go to `transcripts.jsonl`, and their size to the journal so coverage
+is auditable without opening eighty payloads. Not into the published bundle, for
+the same reason the prompts are not: a published match should carry the match
+and nothing else.
+
+**What each vendor will actually give you**, measured live rather than assumed:
+
+| Vendor | Trace | Notes |
+|---|---|---|
+| Anthropic | 367 chars on `claude-opus-5` | Needs `thinking.display`. **Nothing on `claude-haiku-4-5`** - adaptive thinking is 4.6-and-later, so the shakeout roster has no trace at all |
+| OpenAI | 1,948 chars | Needs `reasoning.summary` **requested**. Without it the reasoning items arrive with an empty summary list and 774 reasoning tokens are billed for nothing retained |
+| xAI | 132 chars | `reasoning_content` on the message - a vendor extension to a shared schema, absent from the SDK's typed model, so read by name |
+| Google | **none** | Billed 1,137 thought tokens and exposes no thought text on the interactions surface |
+
+So an absent trace means "this vendor did not offer one", never "the model did
+not think". Two of four seats on the shakeout roster produce nothing, and one of
+those still charges for it.
+
+Worth keeping distinct from the `reasoning` block the action schema requires.
+That block is the account a model writes *knowing it will be read and handed
+back*; the trace is the deliberation behind it. They are different evidence, and
+the interesting comparison is between them.
+
+---
+
 ## Viewer bugs, which fail the same way
 
 Both of these drew nothing and said nothing. A panel that throws leaves a
@@ -418,19 +452,38 @@ Two structural problems behind it:
   prefix and writes a fresh entry at 1.25x instead of reading at 0.1x. The
   journal shows exactly that: `agent_failure` on turn 7, `cache_miss` on turn 8.
 
-The fix is not simply a smaller SDK timeout. 200s would leave room for a real
-retry, and would also cut off a seat whose median is 120s and whose calls run to
+The fix was not a smaller SDK timeout. 200s would leave room for a real retry,
+and would also cut off a seat whose median is 120s and whose calls run to
 ~19,000 output tokens - manufacturing the vendor bias the 420s exists to
-prevent. The two limits are answering different questions and currently share
-one number.
+prevent. Every value was wrong for one case or the other, because the two limits
+were answering different questions through one number.
 
-**The right shape is probably an idle timeout rather than a total one.** A
-model streaming tokens is alive however long it takes; a connection that has
-produced no bytes for two minutes is hung. That distinction costs a slow
-thinker nothing and catches a stall in a fraction of the time, which is the
-combination a total-duration cap cannot offer at any setting. It needs a change
-in all four adapters and live verification, so it is written down here rather
-than done in passing.
+**Fixed by measuring silence instead of duration.** A model streaming tokens is
+alive however long it takes; a stream that has produced nothing for ninety
+seconds is not going to speak again. So `stall_gap_s` resets on every event: a
+five-minute thinker costs nothing, and a dead socket is caught in ninety
+seconds, which finally leaves room inside the turn for the retry a hang needs.
+
+- `stall_gap_s` (90s) catches hangs. Raises `Stalled`, a subclass of `Timeout`,
+  so the existing retry ladder picks it up without knowing it exists while the
+  journal can still tell a hang from a model that thought too long.
+- `turn_timeout_s` rose 420s -> 600s and became what it should always have been:
+  a backstop wide enough for one full attempt plus one retry.
+- The guard wraps the iterator rather than rebuilding streaming around it, so
+  each adapter's usage, refusal and stop-reason handling is untouched - the parts
+  most likely to break.
+
+**Two seats, not four.** Anthropic already streamed; OpenAI now does, for the
+guard rather than for the tokens. xAI's chat-completions surface could and does
+not yet. Google's interactions surface exposes no token stream at all, so that
+seat still relies on the transport timeout and the backstop. Recorded here
+rather than papered over: the policy is not yet uniform across the table, and a
+four-way comparison with two different hang policies is a smaller bias than the
+one it replaced, not zero.
+
+All ten live contract tests pass on the streaming path, which matters more than
+usual here - this is precisely the class of change that passes offline and fails
+on the wire.
 
 Same reason a resume always pays a cache write on its first turn: any gap longer
 than five minutes is a cold prefix. Worth knowing before reading a resumed run's

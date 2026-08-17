@@ -50,6 +50,10 @@ class BotClient:
     board: BoardHandle
     model: str = DRY_RUN_MODEL
     name: str = "bot"
+    # A bot does not deliberate, so it reports no trace. Settable because the
+    # loop's persistence of traces has to be testable without a live vendor -
+    # that gap is exactly why traces went unstored for as long as they did.
+    thinking: str | None = None
     calls: int = field(default=0, init=False)
 
     async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
@@ -68,6 +72,7 @@ class BotClient:
             model=self.model,
             latency_ms=0,
             stop_reason="end_turn",
+            thinking=self.thinking,
         )
 
     async def aclose(self) -> None:
@@ -88,7 +93,9 @@ class BoardHandle:
         self.state = state
 
 
-def bot_seats(player_ids: Iterable[str]) -> tuple[dict[str, BotClient], BoardHandle]:
+def bot_seats(
+    player_ids: Iterable[str], *, thinking: str | None = None
+) -> tuple[dict[str, BotClient], BoardHandle]:
     """Clients for every seat, all sharing one view of the board.
 
     Hand the clients to `Orchestrator(clients=...)` and `handle.observe` to its
@@ -96,5 +103,5 @@ def bot_seats(player_ids: Iterable[str]) -> tuple[dict[str, BotClient], BoardHan
     the opening position, and the match would go nowhere at great length.
     """
     handle = BoardHandle()
-    clients = {pid: BotClient(player_id=pid, board=handle) for pid in player_ids}
+    clients = {pid: BotClient(player_id=pid, board=handle, thinking=thinking) for pid in player_ids}
     return clients, handle
