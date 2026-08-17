@@ -235,7 +235,21 @@ def turn_frame(
 
 # Event types that would swamp the ticker without telling a spectator anything.
 # Movement is already visible on the board; rejected orders are debugging detail.
-_NOISE = frozenset({"turn_started", "turn_ended", "unit_moved", "order_rejected", "agent_action"})
+_NOISE = frozenset(
+    {
+        "turn_started",
+        "turn_ended",
+        "unit_moved",
+        "order_rejected",
+        "agent_action",
+        # The reply's *words* belong in the diplomacy thread, and go there. As a
+        # ticker line it only ever restates the `treaty_signed` or
+        # `proposal_rejected` sitting directly above it: "grok accepted gemini's
+        # non_aggression proposal" followed by "grok answered gemini" is one
+        # event reported twice.
+        "proposal_answered",
+    }
+)
 
 
 def _combat(events: list[Event]) -> list[dict[str, Any]]:
