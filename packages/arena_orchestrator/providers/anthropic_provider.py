@@ -35,6 +35,7 @@ import time
 from typing import Any
 
 from .base import (
+    THINKING_BUDGET,
     FatalProviderError,
     Malformed,
     Overloaded,
@@ -81,7 +82,7 @@ class AnthropicClient:
         # Above STREAM_ABOVE_MAX_TOKENS the adapter switches to streaming, which
         # is why that ceiling exists.
         max_tokens: int = 32_000,
-        effort: str = "high",
+        effort: str = "medium",
         thinking_display: str | None = "summarized",
         # The transport backstop. A stalled stream is now caught by `stall_gap_s`
         # in a fraction of this, so this only fires on something the stream layer
@@ -129,13 +130,24 @@ class AnthropicClient:
             # `output_format` is deprecated API-wide.
             "output_config": output_config,
         }
-        # `effort` travels with adaptive thinking; both are 4.6-and-later.
+        # Two dials, one intent. 4.6-and-later take adaptive thinking plus an
+        # effort enum; everything before it takes an explicit token budget.
+        #
+        # The `else` is the point. It used to not exist, so a pre-4.6 model was
+        # sent no thinking instruction at all - which on the shakeout roster
+        # meant `claude-haiku-4-5` played every match of this project with
+        # reasoning off while the seat beside it was set to `high`. It produced
+        # no trace either, and the absence read as "this vendor gives none"
+        # rather than "we never asked".
+        thinking: dict[str, Any] = {}
         if self._supports_adaptive:
-            thinking: dict[str, Any] = {"type": "adaptive"}
-            if self._thinking_display:
-                thinking["display"] = self._thinking_display
-            request["thinking"] = thinking
+            thinking = {"type": "adaptive"}
             output_config["effort"] = self._effort
+        else:
+            thinking = {"type": "enabled", "budget_tokens": THINKING_BUDGET[self._effort]}
+        if self._thinking_display:
+            thinking["display"] = self._thinking_display
+        request["thinking"] = thinking
 
         started = time.monotonic()
         try:

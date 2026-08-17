@@ -88,6 +88,12 @@ class RunConfig:
     # docs/findings.md rather than papered over.
     stall_gap_s: float = 90.0
 
+    # How hard every seat is told to think. One value for the match, mapped by
+    # each adapter onto its vendor's dial - see `providers.base.EFFORTS` for why
+    # this is one setting rather than four defaults, and for what parity here
+    # does and does not guarantee.
+    reasoning_effort: str = "medium"
+
     # Throttling, per provider. Deliberately conservative: being rejected costs
     # a round trip plus backoff, waiting costs milliseconds.
     requests_per_minute: float = 50.0

@@ -69,7 +69,7 @@ class OpenAIClient:
         # every turn of a shakeout. Sized for thinking plus the payload; unused
         # headroom costs nothing, since billing is on tokens produced.
         max_output_tokens: int = 32_000,
-        reasoning_effort: str | None = "high",
+        reasoning_effort: str | None = "medium",
         # The transport backstop, for a connection that never opens. A stream
         # that opens and then dies is caught by the gap below, far sooner.
         timeout: float = 400.0,
@@ -117,13 +117,29 @@ class OpenAIClient:
             # worst: any value low enough to catch the hang truncates the normal
             # case. Silence between events separates them.
             #
-            # `get_final_response()` returns the same assembled object
-            # `create()` did, so status, refusal, usage and reasoning parsing
-            # below are untouched.
+            # The response is taken from the events, not from
+            # `get_final_response()`. That helper raises "Didn't receive a
+            # `response.completed` event" whenever a stream ends any other way -
+            # and the most common other way is `response.incomplete`, which is
+            # what this model does when reasoning exhausts the output cap.
+            #
+            # Non-streaming `create()` returned that as an ordinary object with
+            # `status == "incomplete"`, handled below as a retryable `Malformed`
+            # carrying a diagnosis. Streaming turned the same condition into a
+            # fatal error, which then tripped the circuit breaker: measured on a
+            # live 51-turn run, this seat lost 21 of its turns - 41% - to a
+            # condition it had been recovering from for weeks.
+            #
+            # Every terminal event carries the response, so keeping the last one
+            # seen restores the old behaviour exactly while keeping the stall
+            # guard.
+            final = None
             async with self._client.responses.stream(**request) as stream:
-                async for _ in unstalled(stream, gap_s=self._stall_gap_s, provider=self.name):
-                    pass
-                response = await stream.get_final_response()
+                async for event in unstalled(stream, gap_s=self._stall_gap_s, provider=self.name):
+                    final = getattr(event, "response", None) or final
+            if final is None:
+                raise Malformed("stream ended with no response object", provider=self.name)
+            response = final
         except Exception as error:  # noqa: BLE001 - translated below, never swallowed
             raise _translate(error, self._sdk, self.name) from error
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -193,6 +209,9 @@ class XAIClient:
         base_url: str = XAI_BASE_URL,
         max_tokens: int = 8_000,
         timeout: float = 400.0,
+        # Was sent nothing at all, so this seat ran on whatever the vendor
+        # defaults to while two other seats were explicitly set to `high`.
+        reasoning_effort: str | None = "medium",
     ):
         import openai
 
@@ -209,13 +228,16 @@ class XAIClient:
         )
         self.model = model
         self._max_tokens = max_tokens
+        self._reasoning_effort = reasoning_effort
 
     async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
         started = time.monotonic()
+        extra = {"reasoning_effort": self._reasoning_effort} if self._reasoning_effort else {}
         try:
             response = await self._client.chat.completions.create(
                 model=self.model,
                 max_tokens=self._max_tokens,
+                **extra,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},

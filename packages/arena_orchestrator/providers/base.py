@@ -137,6 +137,33 @@ class LLMClient(Protocol):
 # pattern-match on types it might not know about.
 
 
+# How hard every seat is told to think. One value for the match, mapped by each
+# adapter onto whatever dial its vendor exposes.
+#
+# This exists because the four seats were not being asked the same question.
+# Anthropic and OpenAI were sent `effort: high`; xAI and Google were sent
+# nothing and ran on vendor defaults; and `claude-haiku-4-5`, being pre-4.6,
+# had adaptive thinking skipped entirely and so received no reasoning
+# instruction at all. Measured over 51 live turns the spread was 608k output
+# tokens on one seat against 35k on another, with two seats producing no
+# reasoning trace whatsoever. Some of that is the models differing. An unknown
+# amount of it was us, and in a four-way comparison that is the part that
+# invalidates the result.
+#
+# **Parity here is intent, not identity, and the difference matters.** An
+# effort enum, a thinking-token budget and a thinking level are not the same
+# instrument, and no mapping makes "high" mean the same thing to four vendors.
+# What this guarantees is that every seat is asked deliberately and that the
+# asking is recorded, so the residue is visible in the journal instead of
+# hiding in four different defaults.
+EFFORTS = ("low", "medium", "high")
+
+# Anthropic before 4.6 takes a token budget rather than an enum. Sized well
+# under the 32k output cap, because thinking is billed against it and a budget
+# that leaves no room for the answer produces a truncated response instead.
+THINKING_BUDGET = {"low": 2_000, "medium": 6_000, "high": 12_000}
+
+
 class ProviderError(Exception):
     """Base class. Never raised directly."""
 

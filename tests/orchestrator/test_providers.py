@@ -259,7 +259,13 @@ def fake_openai_sdk() -> types.ModuleType:
     return module
 
 
-def responses_stub(response, *, seen: dict | None = None, error: Exception | None = None):
+def responses_stub(
+    response,
+    *,
+    seen: dict | None = None,
+    error: Exception | None = None,
+    completed: bool = True,
+):
     """A stand-in for `client.responses`, offering the streaming surface.
 
     The adapter streams so that a dead connection is caught by silence rather
@@ -270,6 +276,7 @@ def responses_stub(response, *, seen: dict | None = None, error: Exception | Non
     class Stream:
         def __init__(self, **request):
             self._request = request
+            self.completed = completed
 
         async def __aenter__(self):
             if seen is not None:
@@ -283,12 +290,22 @@ def responses_stub(response, *, seen: dict | None = None, error: Exception | Non
 
         def __aiter__(self):
             async def events():
-                for kind in ("response.created", "response.output_text.delta"):
-                    yield Bag(type=kind)
+                yield Bag(type="response.created", response=None)
+                yield Bag(type="response.output_text.delta", response=None)
+                # The terminal event carries the response, whether the stream
+                # completed or ran out of output budget.
+                yield Bag(
+                    type="response.completed" if self.completed else "response.incomplete",
+                    response=response,
+                )
 
             return events()
 
         async def get_final_response(self):
+            # Matches the SDK: it refuses to assemble a response for a stream
+            # that ended any way other than completed.
+            if not self.completed:
+                raise RuntimeError("Didn't receive a `response.completed` event")
             return response
 
     return Bag(stream=lambda **kw: Stream(**kw), close=_noop)
@@ -594,3 +611,43 @@ def test_every_adapter_reports_uncached_input_not_total() -> None:
             f"portion or it is not reporting it at all."
         )
         assert usage.input_tokens + usage.cache_read_tokens == 1000, name
+
+
+async def test_openai_an_incomplete_stream_is_retryable_not_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression that cost one seat 41% of its turns on a live run.
+
+    Reasoning is billed against `max_output_tokens`, so a model thinking hard
+    about a late board exhausts the cap and the response comes back
+    `incomplete`. Non-streaming `create()` returned that as an object, and the
+    status check below turned it into a retryable `Malformed` with a diagnosis
+    attached. Switching to streaming for the stall guard changed nothing about
+    that path except *how the object is obtained* - and
+    `get_final_response()` raises rather than returns for any stream that did
+    not complete, which made a recoverable condition fatal and then tripped the
+    circuit breaker on top.
+
+    The fix reads the response off the terminal event instead. The assertion
+    that matters is the error *class*: fatal means the agent passes and the
+    breaker counts it, retryable means it tries again.
+    """
+    monkeypatch.setitem(sys.modules, "openai", fake_openai_sdk())
+    from arena_orchestrator.providers.openai_provider import OpenAIClient
+
+    client = OpenAIClient(api_key="x")
+    truncated = Bag(
+        output_text="",
+        status="incomplete",
+        incomplete_details=Bag(reason="max_output_tokens"),
+        output=[],
+        usage=Bag(output_tokens=32000, input_tokens=9000),
+    )
+    client._client = Bag(responses=responses_stub(truncated, completed=False), close=_noop)
+
+    with pytest.raises(Malformed, match="incomplete") as caught:
+        await client.complete("system", "user", SCHEMA)
+    assert caught.value.retryable is True, "a truncated response must be worth retrying"
+    # The diagnosis is the useful half: without it this reads as an empty body
+    # and sends you to the schema, which is where an hour went the first time.
+    assert "reasoning is billed against this cap" in str(caught.value)

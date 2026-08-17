@@ -76,6 +76,15 @@ def _now() -> str:
 # that seat still depends on the transport timeout and the turn backstop.
 STREAMING_PROVIDERS = frozenset({"anthropic", "openai"})
 
+# What each vendor calls the reasoning dial. The names differ, the intent does
+# not, and keeping the mapping here means the match sets it once.
+EFFORT_PARAM = {
+    "anthropic": "effort",
+    "openai": "reasoning_effort",
+    "xai": "reasoning_effort",
+    "google": "effort",
+}
+
 
 @dataclass
 class MatchResult:
@@ -131,6 +140,7 @@ class Orchestrator:
         self._buckets: dict[str, TokenBucket] = {}
         self._breakers: dict[str, CircuitBreaker] = {}
         self.agents: dict[str, Agent] = {}
+        effort = self.config.reasoning_effort
         for seat in self.config.seats:
             # The stall gap is match policy rather than seat configuration, so it
             # comes from the run config - but a seat may still override it, and a
@@ -138,6 +148,11 @@ class Orchestrator:
             options = dict(seat.options)
             if seat.provider in STREAMING_PROVIDERS:
                 options.setdefault("stall_gap_s", self.config.stall_gap_s)
+            # Every vendor takes it under a different name, and every vendor now
+            # takes it. A seat may still override, which is how an experiment
+            # that *wants* asymmetry asks for it explicitly rather than
+            # inheriting it from whichever defaults happened to disagree.
+            options.setdefault(EFFORT_PARAM.get(seat.provider, "effort"), effort)
             client = (self.clients or {}).get(seat.player_id) or build_client(
                 seat.provider, seat.model, **options
             )

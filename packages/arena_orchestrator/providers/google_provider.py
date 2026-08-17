@@ -62,6 +62,8 @@ class GoogleClient:
         # gave up first the turn would be recorded as a transport timeout rather
         # than as the model taking too long, which are different diagnoses.
         timeout: float = 400.0,
+        # This seat was sent no reasoning instruction at all. See EFFORTS.
+        effort: str = "medium",
     ):
         from google import genai
 
@@ -70,6 +72,7 @@ class GoogleClient:
         self.model = model
         self._max_output_tokens = max_output_tokens
         self._timeout = timeout
+        self._effort = effort
 
     async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
         started = time.monotonic()
@@ -94,7 +97,19 @@ class GoogleClient:
                 #     silently ignored - the model then answers in prose, every
                 #     turn fails to parse, and every agent passes.
                 response_format=[{"mime_type": "application/json", "schema": schema}],
-                generation_config={"max_output_tokens": self._max_output_tokens},
+                # `thinking_config` is why this seat is no longer the one running
+                # on vendor defaults while two others were set to `high`. The
+                # level is the same intent every other adapter is given;
+                # `include_thoughts` asks for the trace, which this surface
+                # otherwise bills for and never shows - 1,137 thought tokens on a
+                # probe with no thought text attached.
+                generation_config={
+                    "max_output_tokens": self._max_output_tokens,
+                    "thinking_config": {
+                        "thinking_level": self._effort.upper(),
+                        "include_thoughts": True,
+                    },
+                },
             )
         except Exception as error:  # noqa: BLE001 - translated below, never swallowed
             raise _translate(error, self.name) from error
@@ -121,12 +136,38 @@ class GoogleClient:
             model=self.model,
             latency_ms=latency_ms,
             stop_reason=status,
+            thinking=_thoughts(response),
         )
 
     async def aclose(self) -> None:
         close = getattr(self._client, "aclose", None)
         if close is not None:
             await close()
+
+
+def _thoughts(response: Any) -> str | None:
+    """The thought summaries, if this surface ever returns any.
+
+    It currently does not. The response carries a `steps` list whose first entry
+    is a `ThoughtStep`, and that step has exactly two useful fields: `summary`,
+    which comes back empty, and `signature`, which is an opaque encrypted blob.
+    Measured with `include_thoughts: True` set and 1,399 thought tokens billed on
+    the same call - so the model thought, the meter ran, and the only artifact is
+    a sealed envelope.
+
+    Read anyway rather than assumed absent, because the cost of being wrong in
+    that direction is losing the trace silently on the day the field starts
+    arriving - which is how three adapters came to parse a trace that nothing
+    stored. `Turn.thinking` stays None while the summaries are empty, and None
+    means "not offered", never "did not think".
+    """
+    parts = [
+        text
+        for step in (getattr(response, "steps", None) or [])
+        if getattr(step, "type", None) == "thought"
+        if (text := (getattr(step, "summary", "") or "").strip())
+    ]
+    return "\n\n".join(parts) or None
 
 
 def _field(raw: Any, name: str) -> int:
