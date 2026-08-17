@@ -56,7 +56,31 @@ def for_provider(schema: dict[str, Any], provider: str) -> dict[str, Any]:
     """The action schema as this vendor will accept it."""
     if provider not in NEEDS_FLATTENING:
         return schema
-    return prune(flatten_unions(schema))
+    # Descriptions come off *before* flattening, not after: the merge writes a
+    # description of its own spelling out which fields each action needs, and
+    # that one is load-bearing. Stripping last would have removed it.
+    return prune(flatten_unions(strip_descriptions(schema)))
+
+
+def strip_descriptions(schema: dict[str, Any]) -> dict[str, Any]:
+    """Drop field descriptions, which Anthropic alone cannot afford.
+
+    They are worth real money everywhere else - two of four models in the first
+    live match never wrote an opponent model, and the field carried no
+    description, so its name was the only guidance. But every byte here is
+    compiled into a grammar against a cap of about 6KB, and the descriptions
+    added 1,400 of them, which pushed the dialect over.
+
+    The same guidance goes to every vendor through the rules reference instead,
+    where it sits in the cached prefix at a tenth the price and counts against
+    nothing. Descriptions stay in the schema for the three vendors that can take
+    them, because a field explains itself best where the field is.
+    """
+    if isinstance(schema, list):
+        return [strip_descriptions(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    return {k: strip_descriptions(v) for k, v in schema.items() if k != "description"}
 
 
 def flatten_unions(schema: dict[str, Any]) -> dict[str, Any]:

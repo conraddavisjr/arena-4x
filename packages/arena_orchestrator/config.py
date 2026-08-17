@@ -65,7 +65,34 @@ class RunConfig:
     # ~15,500 output tokens a call - almost all of it reasoning. That is not a
     # hung request, it is a model thinking, and cutting it off was manufacturing
     # exactly the vendor bias this number exists to avoid.
-    turn_timeout_s: float = 420.0
+    #
+    # Then raised again, to 600s, once it stopped being the thing that catches
+    # hangs. At 420s it was doing two jobs badly: a seat with a 23-second median
+    # sat at the cap twice in a row on a dead stream and was recorded exactly as
+    # a slow model would have been, and 420s left only 20 seconds inside the
+    # turn for the retry a hang needs - so the retry never happened. Stall
+    # detection took the first job (see `stall_gap_s`), and this became what it
+    # should always have been: a backstop wide enough that one full attempt plus
+    # one retry fits underneath it.
+    turn_timeout_s: float = 600.0
+
+    # How long a streaming response may produce nothing before it is abandoned
+    # and retried. This is the number that actually catches a hang, and it can be
+    # aggressive where a total cap could not: a model streaming tokens resets it
+    # on every event, so thinking for five minutes costs nothing here while a
+    # socket that stops talking is caught in ninety seconds.
+    #
+    # Applies to the two seats that stream. Google's interactions surface exposes
+    # no token stream, so that seat still relies on the transport timeout and the
+    # backstop above - which is honest rather than ideal, and recorded in
+    # docs/findings.md rather than papered over.
+    stall_gap_s: float = 90.0
+
+    # How hard every seat is told to think. One value for the match, mapped by
+    # each adapter onto its vendor's dial - see `providers.base.EFFORTS` for why
+    # this is one setting rather than four defaults, and for what parity here
+    # does and does not guarantee.
+    reasoning_effort: str = "medium"
 
     # Throttling, per provider. Deliberately conservative: being rejected costs
     # a round trip plus backoff, waiting costs milliseconds.

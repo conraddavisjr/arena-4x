@@ -22,31 +22,161 @@
   body{margin:0;background:var(--bg);color:var(--ink);
     font:13px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
     display:grid;grid-template-columns:minmax(0,1fr) 360px;height:100vh;overflow:hidden}
-  main{position:relative;display:flex;flex-direction:column;min-width:0}
+  main{position:relative;display:flex;flex-direction:column;min-width:0;
+    height:100vh;overflow:hidden}
   aside{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto}
-  #stage{flex:1;min-height:0;position:relative}
+  /* min-height:0 is what actually pins the scrubber. Without it a flex child
+     refuses to shrink below its content, the stage grows past the viewport and
+     pushes the scrubber off the bottom of the screen - which is exactly how it
+     went missing. flex-shrink:0 on the bar then stops it being squeezed away on
+     a short window. */
+  #stage{flex:1;min-height:0;position:relative;overflow:hidden}
   canvas{display:block;width:100%;height:100%}
 
   header{position:absolute;top:0;left:0;right:0;z-index:2;display:flex;gap:10px;align-items:center;
     padding:10px 14px;background:linear-gradient(#0b0f14ee,#0b0f1400);flex-wrap:wrap}
+  /* `hidden` loses to any element with an explicit `display`, and several here
+     have one - so hiding the scrubber by attribute silently did nothing. */
+  [hidden]{display:none !important}
   h1{font-size:13px;margin:0;font-weight:600;letter-spacing:.04em}
+  /* Reads as the title, behaves as a button. */
+  .brand{background:none;border:0;padding:0;font-size:13px;font-weight:600;
+    letter-spacing:.04em;color:var(--ink)}
+  .brand:hover{background:none;color:#cfe0ff}
+
+  /* The match library. A dialog rather than a page, because it is a way back to
+     the shelf rather than a place you stay. */
+  #libWrap{position:fixed;inset:0;z-index:60;background:#040709d9;
+    display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px}
+  #libWrap[hidden]{display:none}
+  #lib{width:100%;max-width:760px;max-height:82vh;display:flex;flex-direction:column;
+    background:#0d1117;border:1px solid #33404f;border-radius:10px;
+    box-shadow:0 24px 70px #000c;overflow:hidden}
+  #lib header{position:static;padding:12px 14px;border-bottom:1px solid var(--line);
+    display:flex;gap:10px;align-items:center;background:none}
+  #lib h2{margin:0;font-size:13px;font-weight:600;letter-spacing:.04em}
+  #libFind{flex:1;background:#161c24;border:1px solid var(--line);border-radius:6px;
+    padding:6px 9px;color:var(--ink);font:inherit;font-size:12px;min-width:0}
+  #libList{overflow-y:auto;padding:6px}
+  .match{display:grid;grid-template-columns:26px 1fr auto;gap:10px;align-items:center;
+    padding:9px 10px;border-radius:7px;border:1px solid transparent;cursor:pointer}
+  .match:hover{background:#151b23;border-color:#2a3441}
+  .match.here{border-color:#2f6feb;background:#111a25}
+  .match .star{background:none;border:0;padding:2px 4px;font-size:15px;line-height:1;
+    color:#3d4652}
+  .match .star.on{color:#fbbf24}
+  .match .title{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
+  .match .who{display:flex;gap:5px;align-items:center;margin-top:3px}
+  .match .sub{color:var(--dim);font-size:11px;margin-top:2px}
+  .match .right{text-align:right;color:var(--dim);font-size:11px;white-space:nowrap}
+  .match .rename{background:none;border:0;color:var(--faint);font-size:11px;padding:0 3px}
+  .match .rename:hover{background:none;color:#cfe0ff}
+  .approx{color:var(--faint)}
   button{background:#1b222c;color:var(--ink);border:1px solid var(--line);padding:5px 10px;
     border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
   button:hover{background:#28313d}
   button[aria-pressed="true"]{background:#2f6feb;border-color:#2f6feb}
   .scrub{display:flex;align-items:center;gap:10px;padding:8px 14px;border-top:1px solid var(--line);
-    background:var(--panel)}
+    background:var(--panel);flex:0 0 auto;z-index:3}
   input[type=range]{flex:1;accent-color:#2f6feb}
   .turn{font-variant-numeric:tabular-nums;min-width:96px;color:var(--dim)}
   .hint{position:absolute;bottom:8px;left:14px;color:var(--faint);font-size:11px;z-index:2}
 
-  section{border-bottom:1px solid var(--line);padding:12px 14px}
-  h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 8px;font-weight:600}
+  details{border-bottom:1px solid var(--line)}
+  details > div{padding:0 14px 12px}
+  summary{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+    font-weight:600;padding:10px 14px;cursor:pointer;user-select:none;
+    display:flex;align-items:center;gap:8px;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸";font-size:11px;color:var(--dim);width:9px}
+  details[open] > summary::before{content:"▾"}
+  summary:hover{color:var(--ink)}
+  /* The count on a closed section. Empty ones stay quiet rather than showing a
+     zero, so the eye only goes to sections with something to say. */
+  summary i{font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums;
+    margin-left:auto;font-size:11px}
+  summary i.hot{color:#4ade80}
+  /* Stacked bars, pure CSS. A chart library would be the fifth dependency and
+     the first one that has to be vendored for an offline page. */
+  .sigrow{padding:6px 0;border-bottom:1px solid #1a212b}
+  .sigrow:last-of-type{border-bottom:none}
+  .sigrow .who{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:4px}
+  .sigrow .tags{margin-left:auto;display:flex;gap:4px}
+  .tag{font-size:10px;color:var(--faint);border:1px solid var(--line);border-radius:3px;
+    padding:0 5px;font-weight:500}
+  .tag.bad{color:#f87171;border-color:#5c2424}
+  .metric{display:flex;align-items:center;gap:8px;margin:2px 0}
+  .metric label{width:52px;color:var(--faint);font-size:11px}
+  .metric .n{color:var(--faint);font-size:11px;min-width:38px;text-align:right}
+  .metric.clickable{cursor:pointer}
+  .metric.clickable:hover label{color:var(--ink)}
+  .fights{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+  .fights .who{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px}
+  .fights .who button{margin-left:auto}
+  .fight{padding:4px 0 4px 8px;border-left:2px solid var(--line);margin-bottom:4px;
+    color:var(--dim)}
+  .fight.won{border-left-color:#4ade80}
+  .fight.lost{border-left-color:#f87171}
+  .k{font-weight:600}
+  /* Production was grey, which in this palette is the colour of "nothing here"
+     - every disabled label and faint caption is grey - so a civ out-producing
+     the table looked like an empty bar. Violet rather than the combat purple
+     below it, which is redder; the two never share a row. */
+  .k.gold{color:#fbbf24}.k.sci{color:#38bdf8}.k.prod{color:#a78bfa}.k.food{color:#4ade80}
+  .k.mil{color:#f87171}.k.pub{color:#4ade80}.k.dm{color:#f472b6}
+  .bars{display:inline-flex;width:100%;height:8px;border-radius:2px;overflow:hidden;
+    background:#1b222c;min-width:56px}
+  .bars i{display:block;height:100%}
+  .bars i.gold{background:#fbbf24}
+  .bars i.sci{background:#38bdf8}
+  .bars i.prod{background:#a78bfa}
+  .bars i.mil{background:#f87171}
+  .bars i.food{background:#4ade80}
+  .bars i.war{background:#f87171}
+  .bars i.wild{background:#a855f7}
+  .bars i.pub{background:#4ade80}
+  .bars i.dm{background:#f472b6}
+  td .n{margin-left:6px;color:var(--faint);font-size:11px}
+  td.hurt{color:#f87171;font-weight:600}
+  .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+  button.who-btn{font-size:11px;padding:3px 7px}
   table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
   th,td{text-align:right;padding:3px 4px}
   th:first-child,td:first-child{text-align:left}
   td.name{width:42%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   thead th{color:var(--dim);font-weight:500;font-size:11px;border-bottom:1px solid var(--line)}
+  thead th[title]{cursor:help;text-decoration:underline dotted var(--faint);
+    text-underline-offset:3px}
+  /* A tooltip we draw ourselves. The native `title` gives the help cursor and
+     then, in this narrow panel, often nothing else - the browser wants a
+     second of motionless hover and puts the bubble wherever it likes, which on
+     a column header at the edge of the pane is frequently off-screen. If the
+     column names need explaining at all, the explanation has to actually
+     arrive. */
+  /* Shown and hidden outright, with no fade. A tooltip that animates in is a
+     tooltip that is briefly unreadable, and a half-opaque box over a table of
+     numbers is worse than no box - the two sets of digits interleave. */
+  #tip{position:fixed;z-index:50;max-width:280px;pointer-events:none;display:none;
+    background:#0d1117;border:1px solid #33404f;border-radius:6px;
+    padding:7px 9px;font-size:11px;line-height:1.45;color:var(--ink);
+    box-shadow:0 6px 20px #000a}
+  #tip.on{display:block}
+  /* The view menu. Anchored to its button rather than to the header, so it
+     stays put when the status text beside it grows a victory line. */
+  .menu{position:relative}
+  .caret{color:var(--faint)}
+  #viewMenu{position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:210px;
+    background:#0d1117;border:1px solid #33404f;border-radius:8px;padding:5px;
+    box-shadow:0 10px 28px #000b}
+  #viewMenu .group{font-size:9px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--faint);padding:6px 8px 3px}
+  #viewMenu button{display:flex;align-items:center;gap:7px;width:100%;text-align:left;
+    border:0;background:none;padding:6px 8px;border-radius:5px;font-size:12px}
+  #viewMenu button:hover{background:#182028}
+  #viewMenu button[aria-checked="true"]{background:#1b2836;color:#cfe0ff}
+  /* A tick rather than a highlight alone, so the current view survives being
+     read at a glance or in a screenshot. */
+  #viewMenu button[aria-checked="true"]::after{content:"✓";margin-left:auto;color:#4ade80}
   .civ{display:flex;align-items:center;gap:6px}
   .dot{width:9px;height:9px;border-radius:50%;flex:none}
   .dead{opacity:.4;text-decoration:line-through}
@@ -59,15 +189,100 @@
   .msg{border-left:2px solid var(--line);padding:4px 0 4px 8px;margin-bottom:6px}
   .msg.private{border-left-color:#f472b6}
   .msg .meta{color:var(--faint);font-size:11px}
+  tr.fogged td{color:var(--faint)}
+  td.unseen{text-align:center;font-style:italic;color:var(--faint)}
+  .card[data-civ]{cursor:pointer}
+  .card[data-civ]:hover{border-color:#33404f}
+  .card .meta{color:var(--faint);font-size:11px}
+  .card p b{color:var(--dim);font-weight:600}
+  /* Collapsed reasoning is clamped rather than hidden: enough to recognise the
+     turn at a glance, not enough to bury the three panels underneath it. */
+  .clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  #dossier .who{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px}
+  #dossier p{margin:4px 0;color:var(--dim)}
+  #dossier b{color:var(--ink);font-weight:600}
+  #dossier ul{margin:2px 0 8px;padding-left:16px;color:var(--dim)}
+  #dossier li{margin:2px 0}
+  /* What changed since last turn. The dossier is mostly stable, so the edit is
+     the signal and the rest is context. */
+  .fresh{color:var(--ink)}
+  #dossier li.fresh::marker{color:#4ade80}
+  .edited{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#4ade80;
+    border:1px solid #245c38;border-radius:3px;padding:1px 5px}
+  /* Same green as `.edited`, deliberately: the outline on the picker and the
+     word on the card are one fact, so they should not be two colours. */
+  button.who-btn.wrote{border-color:#4ade80;color:#d5f5e0}
+  button.who-btn.wrote::after{content:"";width:5px;height:5px;border-radius:50%;
+    background:#4ade80;display:inline-block;margin-left:5px;vertical-align:middle}
+  #dossier .card[data-doc]{cursor:pointer}
+  #dossier .card[data-doc]:hover{border-color:#33404f}
+  .trust{font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid var(--line)}
+  .trust.high{color:#4ade80;border-color:#245c38}
+  .trust.medium{color:#fbbf24;border-color:#5c4a24}
+  .trust.low{color:#f87171;border-color:#5c2424}
+  .threads{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+  button.thread{font-size:11px;padding:3px 7px;display:inline-flex;align-items:center;gap:5px}
+  button.thread .dot{width:8px;height:8px}
+  button.thread .arrow{color:var(--faint)}
+  button.thread[aria-pressed="true"] .arrow{color:#cfe0ff}
+  /* Public and private have to be told apart at a glance; a border colour alone
+     was doing all the work and none of it legibly. */
+  .chan{font-size:9px;text-transform:uppercase;letter-spacing:.06em;border-radius:3px;
+    padding:1px 4px;margin-right:4px;font-weight:600}
+  .chan.private{color:#f472b6;border:1px solid #5c2444}
+  .chan.public{color:#4ade80;border:1px solid #245c38}
+  /* A proposal carries binding terms and a reply either signs them or does not,
+     so those two get their own colours rather than reading as more chat. */
+  .chan.proposal{color:#c084fc;border:1px solid #4a2a6b}
+  .chan.reply.accept{color:#4ade80;border:1px solid #245c38}
+  .chan.reply.reject{color:#f87171;border:1px solid #6b2626}
+  /* A wordless act, said plainly. A blank line under a chip reads as a broken
+     renderer; "signed without comment" reads as the choice it was. */
+  .wordless{color:var(--faint);font-style:italic}
+  /* A thread that moved this turn. The count alone does not say *when*, so
+     finding the live conversation meant opening each tab in turn.
+     Green, and loud about it - the blue ring read as another shade of the
+     selected-tab blue and disappeared into it. This is the one colour in the
+     panel that means "look here now", so it gets a full-strength border, a
+     glow and a filled dot rather than a tint. */
+  button.thread.live{border-color:#4ade80;box-shadow:0 0 0 1px #4ade8066,0 0 10px #4ade8033}
+  button.thread.live::after{content:"";width:6px;height:6px;border-radius:50%;
+    background:#4ade80;display:inline-block;margin-left:6px;vertical-align:middle;
+    box-shadow:0 0 5px #4ade80}
+  .msg .meta .dot{width:8px;height:8px;display:inline-block;vertical-align:middle;
+    margin-right:3px}
+  .msg{cursor:pointer}
+  .msg.now{border-left-color:#2f6feb;background:#0f141b}
+  /* The sender's private plan, shown beside what it actually said. Reading the
+     two together is the whole reason the transcript is here. */
+  .aside{margin-top:6px;padding:6px 8px;border-radius:4px;background:#161c25;
+    color:var(--dim);font-size:12px}
+  .aside b{color:#fbbf24;font-weight:600}
+  /* A zero cache rate is worth noticing: it is the difference between paying
+     1x and 0.1x for a prefix that never changes. */
+  td.warn{color:#fbbf24}
+  .pact{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#4ade80;
+    border:1px solid #245c38;border-radius:3px;padding:1px 5px}
+  .pact.lapsed{color:var(--faint);border-color:var(--line)}
 </style>
 
 <main>
   <div id="stage">
     <header>
-      <h1>ARENA-4X</h1>
-      <div id="modes" style="display:flex;gap:2px"></div>
+      <!-- The title is the way into the library, which is where a visitor's
+           hand goes anyway. Kept a button so it is reachable by keyboard and
+           announces itself, rather than a heading with a click handler. -->
+      <button id="libBtn" class="brand" aria-haspopup="dialog">ARENA-4X
+        <span class="caret">▾</span></button>
+      <!-- One menu for what you are looking at, and Play left outside it,
+           because Play is the control you reach for repeatedly while the view
+           is something you set and forget. -->
+      <div class="menu">
+        <button id="viewBtn" aria-haspopup="true" aria-expanded="false">
+          <span id="viewNow">All empires</span> <span class="caret">▾</span></button>
+        <div id="viewMenu" role="menu" hidden></div>
+      </div>
       <button id="play">▶ Play</button>
-      <button id="top">Top-down</button>
       <span class="turn" id="status"></span>
     </header>
     <div class="hint">drag to orbit · scroll to zoom · right-drag to pan</div>
@@ -81,11 +296,32 @@
 </main>
 
 <aside>
-  <section><h2>Empires</h2><div id="economy"></div></section>
-  <section><h2>Reasoning</h2><div id="reasoning"></div></section>
-  <section><h2>Diplomacy</h2><div id="messages"></div></section>
-  <section><h2>Events</h2><div id="events"></div></section>
+  <!--
+    Native <details> rather than a JS accordion: the open/closed state survives
+    every re-render for free, because panels() rewrites the inner div and never
+    touches the wrapper. Each summary carries a count, so a collapsed section
+    still tells you whether there is anything in it - a panel you have to open
+    to discover is empty is worse than one always open.
+  -->
+  <details open><summary>Empires<i id="n-economy"></i></summary><div id="economy"></div></details>
+  <details><summary>Cost<i id="n-cost"></i></summary><div id="cost"></div></details>
+  <details open><summary>Reasoning<i id="n-reasoning"></i></summary><div id="reasoning"></div></details>
+  <details><summary>Dossier<i id="n-dossier"></i></summary><div id="dossier"></div></details>
+  <details><summary>Diplomacy<i id="n-messages"></i></summary><div id="messages"></div></details>
+  <details><summary>Events<i id="n-events"></i></summary><div id="events"></div></details>
+  <details><summary>Signals<i id="n-signals"></i></summary><div id="signals"></div></details>
 </aside>
+<div id="tip" role="tooltip" aria-hidden="true"></div>
+<div id="libWrap" hidden>
+  <div id="lib" role="dialog" aria-modal="true" aria-label="Match library">
+    <header>
+      <h2>Matches</h2>
+      <input id="libFind" type="search" placeholder="search name, model, outcome" autocomplete="off">
+      <button id="libClose" aria-label="Close">✕</button>
+    </header>
+    <div id="libList"></div>
+  </div>
+</div>
 
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.min.js","three/":"./vendor/"}}
@@ -95,7 +331,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/OrbitControls.js";
 import {
   HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
-  buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements,
+  buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements, buildPacts,
   unitModel, baseGeometry, surfaceAtlas,
 } from "./world.js";
 
@@ -104,13 +340,20 @@ const CSS = ["var(--c0)", "var(--c1)", "var(--c2)", "var(--c3)"];
 const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
                     "swordsman","horseman","catapult","trireme","wolf","barbarian"];
 
-const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null, index:null };
+const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
+            index:null, expanded:null, dossiers:{}, dossiersBefore:{}, priorTrust:{},
+            threads:null, thread:null, spend:{}, signals:{}, dossierOf:"all", combatOf:null };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
 const cssOf = (id) => (civOf(id) ? CSS[civOf(id).colour % 4] : "#9aa0aa");
 const hexOf = (id) => (civOf(id) ? CIV_COLOURS[civOf(id).colour % 4] : WILD_COLOUR);
-const nameOf = (id) => (civOf(id) ? civOf(id).civ_name : "Wilderness");
+// The model is the label. The civ name is fiction the agents were given; the
+// match is a comparison between models, so that is what a reader needs to see.
+// Both are kept - the civ name is what the agents call each other in their own
+// messages, so hiding it entirely would make the diplomacy feed incoherent.
+const nameOf = (id) => (civOf(id) ? (civOf(id).model || civOf(id).civ_name) : "Wilderness");
+const civNameOf = (id) => (civOf(id) ? civOf(id).civ_name : "Wilderness");
 const esc = (s) => String(s).replace(/[<>&]/g,(c)=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
 
 // --- scene -----------------------------------------------------------------
@@ -134,6 +377,12 @@ controls.dampingFactor = 0.08;
 controls.maxPolarAngle = Math.PI * 0.47;
 controls.minDistance = 6;
 controls.maxDistance = 220;
+// Zoom towards whatever is under the pointer, not towards the orbit target.
+// On a board this wide the difference is most of the usability: centre-zooming
+// means picking a corner of the map, zooming in on the middle, then panning
+// back out to where you were looking - every time. With this, pointing at a
+// city and scrolling arrives at that city.
+controls.zoomToCursor = true;
 
 scene.add(new THREE.HemisphereLight(0xbcd7ff, 0x2b2418, 1.5));
 const sun = new THREE.DirectionalLight(0xfff2d8, 2.1);
@@ -164,7 +413,13 @@ addEventListener("resize", resize);
 // --- data ------------------------------------------------------------------
 async function loadFrame(turn) {
   if (cache.has(turn)) return cache.get(turn);
-  const res = await fetch(`${BASE}/turns/${String(turn).padStart(4,"0")}.json`);
+  // `no-store`, because two different matches serve entirely different content
+  // at identical URLs. Point the viewer at a second bundle on the same port and
+  // the browser answers `turns/0011.json` out of cache from the *first* one -
+  // so the board, the threads and the cost table all describe a match you are
+  // not looking at, with nothing on screen to say so. Costs nothing here: the
+  // frames are cached in `cache` for the session anyway.
+  const res = await fetch(`${BASE}/turns/${String(turn).padStart(4,"0")}.json`, {cache: "no-store"});
   const frame = await res.json();
   cache.set(turn, frame);
   return frame;
@@ -177,9 +432,56 @@ async function loadFrame(turn) {
  * definition cumulative, so both are folded forward from turn 1. Frames are
  * cached, so this is a loop over memory rather than a refetch.
  */
+/**
+ * Every message of the match, gathered once.
+ *
+ * The diplomacy panel used to show only the current turn, which made it a
+ * ticker rather than a record: thirteen messages spread over thirty turns meant
+ * twenty-seven turns of "Nothing said this turn" and no way to read the
+ * negotiation that actually happened. A conversation is the unit here, not a
+ * frame.
+ */
+async function allMessages() {
+  if (S.threads) return S.threads;
+  const messages = [];
+  for (let t = 1; t <= S.match.turns; t++) {
+    for (const m of (await loadFrame(t)).messages || []) messages.push({ ...m, turn: t });
+  }
+  // Keyed by unordered pair, because a thread is a relationship rather than a
+  // direction - reading one side of a negotiation tells you very little.
+  const threads = new Map([["public", []]]);
+  for (const m of messages) {
+    const key = m.channel === "public" ? "public" : [m.from, m.to].sort().join("|");
+    if (!threads.has(key)) threads.set(key, []);
+    threads.get(key).push(m);
+  }
+  S.threads = threads;
+  return threads;
+}
+
 async function foldTo(turn) {
   const owners = new Array(S.match.terrain.length).fill(null);
   const explored = new Map(S.match.civs.map((c) => [c.player_id, new Set()]));
+  // Dossiers are written as deltas, so the current one is the fold and the
+  // previous one is the fold stopped a turn short. Keeping both is what lets
+  // the panel show the *edit* rather than just the text.
+  let dossiers = {};
+  let before = {};
+  const spend = {};
+  // Cumulative signals. Everything here is derived from what the bundle already
+  // carries - no new engine data - and folded forward like everything else, so
+  // the panel reads "as of turn N" rather than "for the whole match".
+  const signals = {};
+  const sig = (pid) => (signals[pid] ??= {
+    said: 0, dm: 0, lostToWild: 0, sacked: 0, met: new Set(),
+    fights: 0, kills: 0, losses: 0, wildFights: 0, log: [],
+  });
+  // The last view each agent expressed about each rival, whenever it expressed
+  // it. Not the same as "what its dossier said last turn": agents rewrite the
+  // whole dossier rather than editing it, so an opponent model can vanish for
+  // several turns and come back revised. Diffing only against the previous turn
+  // missed every one of those - which is most of them.
+  const priorTrust = {};
   for (let t = 1; t <= turn; t++) {
     const f = await loadFrame(t);
     for (const [i, who] of Object.entries(f.owners || {})) owners[+i] = who;
@@ -187,8 +489,59 @@ async function foldTo(turn) {
       const seen = explored.get(pid);
       if (seen) for (const i of tiles) seen.add(i);
     }
+    if (t < turn) {
+      for (const [pid, doc] of Object.entries(f.dossiers || {})) {
+        for (const m of doc.opponent_models || []) {
+          (priorTrust[pid] ??= {})[m.player_id] = m.trustworthiness;
+        }
+      }
+    }
+    for (const m of f.messages || []) {
+      const row = sig(m.from);
+      row.said += 1;
+      if (m.channel === "private") row.dm += 1;
+    }
+    for (const e of f.events || []) {
+      if (!e.actor) continue;
+      const row = sig(e.actor);
+      // "lost to the wilderness" is how the engine phrases a kill by the
+      // neutral faction. Attribution is on the *victim*, which is what makes
+      // this answer the question worth asking: who is being bled by the map.
+      if (e.type === "unit_killed" && e.text.includes("wilderness")) row.lostToWild += 1;
+      if (e.type === "city_sacked") row.sacked += 1;
+
+      if (e.type === "first_contact") {
+        const other = S.match.civs.find((c) => e.text.includes(c.civ_name) && c.player_id !== e.actor);
+        if (other) row.met.add(other.player_id);
+      }
+    }
+    // Combat, from both sides. A fight is recorded against attacker and
+    // defender alike, because "who is being worn down" is the question, and a
+    // civ that is only ever attacked never appears in a list keyed by actor.
+    for (const c of f.combat || []) {
+      const wild = (pid) => pid && !S.match.civs.some((x) => x.player_id === pid);
+      for (const [me, them, iDied, theyDied] of [
+        [c.attacker, c.defender, c.attacker_died, c.defender_died],
+        [c.defender, c.attacker, c.defender_died, c.attacker_died],
+      ]) {
+        if (wild(me) || !me) continue;
+        const row = sig(me);
+        row.fights += 1;
+        if (wild(them)) row.wildFights += 1;
+        if (iDied) row.losses += 1;
+        if (theyDied) row.kills += 1;
+        row.log.push({ turn: t, ...c, mine: me });
+      }
+    }
+    for (const [pid, row] of Object.entries(f.spend || {})) {
+      const acc = (spend[pid] ??= { usd: 0, input: 0, output: 0, cached: 0, ms: 0, turns: 0 });
+      for (const k of ["usd", "input", "output", "cached", "ms"]) acc[k] += row[k] || 0;
+      acc.turns += 1;
+    }
+    before = dossiers;
+    dossiers = { ...dossiers, ...(f.dossiers || {}) };
   }
-  return { owners, explored };
+  return { owners, explored, dossiers, before, priorTrust, spend, signals };
 }
 
 // --- rendering -------------------------------------------------------------
@@ -242,7 +595,12 @@ async function drawTurn() {
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
-  const { owners, explored } = await foldTo(S.turn);
+  const { owners, explored, dossiers, before, priorTrust, spend, signals } = await foldTo(S.turn);
+  S.spend = spend;
+  S.signals = signals;
+  S.dossiers = dossiers;
+  S.dossiersBefore = before;
+  S.priorTrust = priorTrust;
   const known = S.focus ? explored.get(S.focus) : null;
   applyFog(lit, known);
   const at = (i) => {
@@ -266,6 +624,31 @@ async function drawTurn() {
   // wonder. Walls take their own baked colours; only the roofs carry the civ.
   const cities = f.cities.filter((c) => !lit || lit.has(c.at));
   dynamicLayer.add(buildSettlements(cities, (tile) => {
+    const [x, , z] = at(tile);
+    return [x, topOf(tile), z];
+  }, hexOf));
+
+  // Who is bound to whom, as of this turn. A live pact or an alliance both
+  // count; a lapsed pact does not, because a promise that has expired is not a
+  // fact about the board any more.
+  //
+  // Fog applies. In agent mode a civ sees only the treaties it is party to -
+  // knowing that two rivals have secretly agreed not to fight each other is
+  // exactly the sort of thing an agent has to *earn*, and handing it over on
+  // the board would quietly answer the question the replay exists to ask.
+  const bonds = new Map();
+  for (const [pair, v] of Object.entries(f.relations || {})) {
+    const live = v.state === "alliance" || (v.pact_until && v.pact_until >= S.turn);
+    if (!live) continue;
+    const [a, b] = pair.split("|");
+    if (S.mode === "agent" && S.focus && a !== S.focus && b !== S.focus) continue;
+    const kind = v.state === "alliance" ? "alliance" : "pact";
+    for (const [self, other] of [[a, b], [b, a]]) {
+      if (!bonds.has(self)) bonds.set(self, []);
+      bonds.get(self).push({ who: other, kind });
+    }
+  }
+  dynamicLayer.add(buildPacts(S.match.tiles, owners, bonds, (tile) => {
     const [x, , z] = at(tile);
     return [x, topOf(tile), z];
   }, hexOf));
@@ -316,36 +699,538 @@ async function drawTurn() {
 }
 
 // --- panels ----------------------------------------------------------------
+/**
+ * What the focused civ is entitled to know about a rival this turn.
+ *
+ * The board has always respected the fog; this panel did not. In agent mode it
+ * printed every rival's exact gold, food and score straight from the bundle's
+ * god-truth economy - in the one view whose entire purpose is showing what a
+ * civ could see when it made its decisions. Reading a bad call next to numbers
+ * the agent never had is worse than not showing the panel at all.
+ *
+ * `contact` is directed and per-turn: `contact[observer]` lists the rivals that
+ * observer can currently see. Score is revealed on contact and hidden again
+ * when it lapses, which is what the engine's own intel view does.
+ */
+function knows(playerId) {
+  if (S.mode !== "agent" || !S.focus || playerId === S.focus) return true;
+  return (S.frame.contact?.[S.focus] || []).includes(playerId);
+}
+
+function dossierPick(ev) {
+  const b = ev.target.closest(".who-btn");
+  if (b) {
+    S.dossierOf = b.dataset.who;
+    S.dossierOpen = null;
+    panels();
+    return;
+  }
+  // A card in the "all" view opens to its full text. Checked after the picker
+  // because the picker sits inside the same container.
+  const card = ev.target.closest(".card[data-doc]");
+  if (!card) return;
+  S.dossierOpen = S.dossierOpen === card.dataset.doc ? null : card.dataset.doc;
+  panels();
+}
+
+/** The count beside a collapsed section heading. */
+function badge(id, value, hot = false) {
+  const el = $(`n-${id}`);
+  if (!el) return;
+  el.textContent = value ? String(value) : "";
+  el.className = hot ? "hot" : "";
+}
+
 function panels() {
   const f = S.frame, e = f.economy;
   const sign = (n) => (n ? `<span class="${n<0?"neg":"pos"}">${n>0?"+":""}${n}</span>` : "");
+  const hidden = `<td colspan="5" class="unseen">not in contact</td>`;
   $("economy").innerHTML = `<table><thead><tr><th>civ</th><th>gold</th><th>food</th>
     <th>prod</th><th>sci</th><th>c/u</th><th>score</th></tr></thead><tbody>${
     S.match.civs.map((c) => {
       const d = e[c.player_id] || {};
-      return `<tr class="${d.alive?"":"dead"}"><td class="name" title="${c.civ_name}">
-        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}</span></td>
+      const name = `<td class="name" title="${c.civ_name} · ${c.model || "?"}">
+        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
+          c.model || c.civ_name}</span></td>`;
+      if (!knows(c.player_id)) return `<tr class="fogged">${name}${hidden}</tr>`;
+      return `<tr class="${d.alive?"":"dead"}">${name}
         <td>${d.gold??0} ${sign(d.gold_per_turn??0)}</td><td>${d.food_stored??0} ${sign(d.food_surplus??0)}</td>
         <td>${d.production_per_turn??0}</td><td>${d.science_per_turn??0}</td>
         <td>${d.cities??0}/${d.units??0}</td><td>${d.score??0}</td></tr>`;
     }).join("")}</tbody></table>`;
 
-  $("reasoning").innerHTML = S.match.civs.filter((c) => f.reasoning?.[c.player_id]).map((c) => {
+  // The cost meter. Deliberately *not* fog-limited: what a run cost is a fact
+  // about the experiment rather than about the game, and hiding another
+  // model's bill from you in agent mode would be fog cosplay - no agent ever
+  // saw any of this, including its own.
+  const totals = S.match.civs.map((c) => ({ c, s: S.spend?.[c.player_id] })).filter((r) => r.s);
+  const grand = totals.reduce((a, r) => a + r.s.usd, 0);
+  $("cost").innerHTML = !totals.length ? `<div class="empty">No spend recorded.</div>` : `
+    <table><thead><tr>
+      <th title="Which model played this seat.">model</th>
+      <th title="What this seat has cost so far, in US dollars, from the token counts the vendor actually reported - never an estimate. This is what the budget cap is measured against.">$</th>
+      <th title="Output tokens produced, including reasoning tokens where the vendor bills them as output. This is the expensive half: output runs about five times the price of input.">out tok</th>
+      <th title="Share of input tokens served from cache at roughly a tenth the price. The system prompt is identical every turn, so a healthy number here is large. Zero is worth investigating on a vendor with an explicit cache breakpoint.">cache</th>
+      <th title="Median wall-clock seconds per turn. Turns resolve simultaneously, so the slowest seat sets the pace of the whole match.">s/turn</th>
+      <th title="Score gained per 100,000 tokens spent. The efficiency figure: it compares a cheap model playing adequately against an expensive one playing slightly better, and a leaderboard by this can invert a leaderboard by score.">per 100k</th>
+      </tr></thead><tbody>${
+      totals.map(({ c, s }) => {
+        const tokens = s.input + s.output + s.cached;
+        const score = (S.frame.economy?.[c.player_id] || {}).score || 0;
+        // Score per 100k tokens: the one number that compares a cheap model
+        // playing adequately against an expensive one playing slightly better.
+        const per = tokens ? (score / (tokens / 100000)) : 0;
+        // Against input alone, which is what the column header promises and the
+        // only denominator that means anything: output tokens were never
+        // cacheable, so including them measures how talkative a model is rather
+        // than how well its prefix is being reused. A seat reading half its
+        // prefix from cache reported 13% purely because it thought at length.
+        const inTokens = s.input + s.cached;
+        const cachePct = inTokens ? Math.round(100 * s.cached / inTokens) : 0;
+        return `<tr><td class="name" title="${c.civ_name}">
+          <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
+            c.model || c.civ_name}</span></td>
+          <td>${s.usd.toFixed(3)}</td><td>${(s.output/1000).toFixed(1)}k</td>
+          <td class="${cachePct ? "" : "warn"}" title="${cachePct ? "" :
+            "no cache reads. Worth chasing on a vendor with an explicit breakpoint - " +
+            "a prefix written and never read costs 12.5x. On Gemini it is expected: " +
+            "implicit caching does not engage below roughly 17k tokens and our prefix " +
+            "is 2.2k, where the whole saving would be about 18 cents a match."
+            }">${cachePct}%</td>
+          <td>${(s.ms / s.turns / 1000).toFixed(0)}</td><td>${per.toFixed(0)}</td></tr>`;
+      }).join("")}</tbody></table>
+    <div class="tick" style="margin-top:6px">$${grand.toFixed(3)} through turn ${S.turn}
+      · ${(grand / S.turn * S.match.turn_limit).toFixed(2)} projected at the cap</div>`;
+
+  // In agent mode only the focused civ's own thinking is shown. A rival's
+  // private deliberation is the single largest thing an agent cannot see, and
+  // printing all four next to a board drawn under fog made the fog decorative.
+  const thinkers = S.match.civs.filter(
+    (c) => f.reasoning?.[c.player_id] && (S.mode !== "agent" || c.player_id === S.focus)
+  );
+  $("reasoning").innerHTML = thinkers.map((c) => {
     const d = f.reasoning[c.player_id];
-    return `<div class="card"><div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.civ_name}</div>
-      <p class="plan">${esc(d.plan||"—")}</p></div>`;
+    // Collapsed by default, one open at a time. Bot matches produced a single
+    // sentence here; real agents produce fifteen hundred characters of numbered
+    // execution steps, and four of those in a column pushed the diplomacy feed
+    // and the event ticker off the screen entirely.
+    const open = S.expanded === c.player_id || thinkers.length === 1;
+    const detail = open ? `
+      ${d.assessment ? `<p><b>Situation.</b> ${esc(d.assessment)}</p>` : ""}
+      ${(d.threats||[]).length ? `<p><b>Threats.</b> ${esc((d.threats||[]).join(" · "))}</p>` : ""}
+      <p class="plan"><b>Plan.</b> ${esc(d.plan||"—")}</p>
+      ${d.confidence != null ? `<p class="meta">confidence ${d.confidence}</p>` : ""}` : `
+      <p class="plan clamp">${esc(d.plan||"—")}</p>`;
+    return `<div class="card ${open?"open":""}" data-civ="${c.player_id}">
+      <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.model || c.civ_name}
+        <span class="meta">${
+          // The civ name only earns its space when it says something the label
+          // does not. Since the civs are named after the models, the two are
+          // identical on a live roster and printing both read as a stutter.
+          c.civ_name === (c.model || c.civ_name) ? "" : esc(c.civ_name) + " · "
+        }${open?"▾":"▸"}</span></div>${detail}</div>`;
   }).join("") || `<div class="empty">No reasoning this turn.</div>`;
+  $("reasoning").onclick = (ev) => {
+    const card = ev.target.closest(".card[data-civ]");
+    if (!card) return;
+    S.expanded = S.expanded === card.dataset.civ ? null : card.dataset.civ;
+    panels();
+  };
 
-  const rel = Object.entries(f.relations||{}).filter(([,v])=>v.state!=="neutral")
-    .map(([k,v])=>`<div class="tick">${k.replace("|"," · ")} <b>${v.state}</b> since turn ${v.since}</div>`);
-  $("messages").innerHTML = ((f.messages||[]).map((m)=>`<div class="msg ${m.channel}">
-      <div class="meta">${nameOf(m.from)}${m.to?` → ${nameOf(m.to)}`:" · public"}</div>${esc(m.text)}</div>`).join("")
-      || `<div class="empty">Nothing said this turn.</div>`) +
-    (rel.length?`<div style="margin-top:8px">${rel.join("")}</div>`:"");
+  // Anything other than plain neutrality, which includes a pact. Filtering on
+  // `state !== "neutral"` alone hid every non-aggression pact in the match,
+  // because a pact does not change the state - it is a promise with an expiry
+  // sitting on top of it.
+  const rel = Object.entries(f.relations||{})
+    .filter(([,v]) => v.state !== "neutral" || v.pact_until)
+    .map(([k,v]) => {
+      const pair = k.split("|").map((p) => nameOf(p)).join(" · ");
+      const pact = v.pact_until
+        ? (v.pact_until >= S.turn
+            ? `<span class="pact">pact until ${v.pact_until}</span>`
+            : `<span class="pact lapsed">pact lapsed turn ${v.pact_until}</span>`)
+        : "";
+      const state = v.state !== "neutral"
+        ? `<b>${v.state}</b> since turn ${v.since}` : "";
+      return `<div class="tick">${pair} ${state} ${pact}</div>`;
+    });
+  drawDiplomacy(rel);
 
-  $("events").innerHTML = (f.events||[]).map((ev)=>`<div class="tick">${
+
+  const dossierCount = drawDossier(f);
+
+  // Events are already attributed, so the same rule applies: a civ hears about
+  // what happened to it and what happened in public, not about a rival's
+  // interior life.
+  const audible = (ev) =>
+    S.mode !== "agent" || !S.focus || !ev.actor || ev.actor === S.focus || knows(ev.actor);
+  const shown = (f.events||[]).filter(audible);
+  $("events").innerHTML = shown.map((ev)=>`<div class="tick">${
     ev.actor?`<b style="color:${cssOf(ev.actor)}">${ev.actor}</b> `:""}${esc(ev.text)}</div>`).join("")
     || `<div class="empty">Quiet turn.</div>`;
+
+  // What each collapsed section would show, so closing one costs no awareness.
+  // `hot` marks what changed *this* turn - a dossier edit, something said -
+  // because those are the reasons to open a section you had shut. Written last,
+  // where every value it reads already exists: an earlier attempt sat above the
+  // panels it counted and threw a temporal-dead-zone error on every render,
+  // which the page survived by simply never drawing the sections below it.
+  const saidNow = (f.messages || []).filter(
+    (m) => S.mode !== "agent" || !S.focus || m.channel !== "private"
+      || m.from === S.focus || m.to === S.focus
+  ).length;
+  badge("economy", S.match.civs.length);
+  badge("cost", Object.keys(S.spend || {}).length);
+  badge("reasoning", thinkers.length);
+  badge("dossier", dossierCount.label, dossierCount.hot);
+  badge("messages", saidNow, saidNow > 0);
+  badge("events", shown.length);
+  drawSignals();
+}
+
+/**
+ * The at-a-glance read: where each civ is pointed, and what is being done to it.
+ *
+ * The raw panels above answer "what happened this turn" well and "is anyone in
+ * trouble" badly - that question is cumulative and comparative, and reading it
+ * out of thirty turns of prose is not realistic. Everything here is derived
+ * from data the bundle already carries and folded to the current turn.
+ */
+/**
+ * The dossier panel.
+ *
+ * Extracted from `panels` for one specific reason: the "all" view returns
+ * early, and while this lived inline that `return` took the whole of `panels`
+ * with it - so with the default picker selected, Events, Signals and every
+ * count badge rendered nothing at all. No error, no console warning, just
+ * three sections that were never drawn; the same shape as the
+ * temporal-dead-zone bug noted further down. A `return` is only safe in a
+ * function that does one thing, so now it is one.
+ *
+ * Returns what the badge needs, which is all the caller still wants from here.
+ */
+function drawDossier(f) {
+  // The dossier: the agent's own memory, returned to it verbatim every turn.
+  // Arguably the single most interesting artifact the lab produces, and until
+  // now it was in the bundle and on no screen. Shown for one civ at a time -
+  // the focused one in agent mode, the expanded one in god mode - because four
+  // of these side by side is unreadable and comparing them is not the point.
+  // The point is watching one change.
+  // Explicit, not inherited. It used to follow whichever reasoning card was
+  // expanded, which meant the panel silently changed subject and gave no way to
+  // say "show me this one" - so it read as "the dossier" rather than "one civ's
+  // dossier", which is a different and much more confusing thing.
+  const who = S.mode === "agent" ? S.focus
+    : (S.dossierOf || S.expanded || S.match.civs[0].player_id);
+  const doc = S.dossiers?.[who];
+  const was = S.dossiersBefore?.[who];
+  const edited = JSON.stringify(doc) !== JSON.stringify(was);
+  const list = (items, old) => (items || []).map((x) =>
+    `<li class="${(old||[]).includes(x) ? "" : "fresh"}">${esc(x)}</li>`).join("");
+  const showAll = S.mode !== "agent" && S.dossierOf === "all";
+  // Who revised their notes on the turn being viewed. Carried onto the picker
+  // itself so the answer to "did anyone write anything" is visible without
+  // opening four tabs to find out - which is the difference between reading a
+  // panel and interrogating it.
+  const editedNow = (pid) => !!(f.dossiers || {})[pid];
+  const picker = S.mode === "agent" ? "" : `<div class="picker">
+    <button class="who-btn" data-who="all" aria-pressed="${showAll}">all</button>${
+    S.match.civs.map((c) => `<button class="who-btn ${editedNow(c.player_id) ? "wrote" : ""}"
+      data-who="${c.player_id}" title="${editedNow(c.player_id)
+        ? "revised its dossier this turn" : "no change this turn"}"
+      aria-pressed="${!showAll && c.player_id === who}">${esc(c.model || c.civ_name)}</button>`).join("")
+  }</div>`;
+  // Said plainly, because it is the panel people most often misread: this is
+  // not a log of everything the agent thought. It is the small note the agent
+  // chooses to write to itself and is handed back verbatim next turn. The
+  // turn-by-turn thinking is the Reasoning panel, for all four civs at once.
+  const note = `<p class="meta">What this agent chose to remember. Its
+    turn-by-turn thinking is in Reasoning.</p>`;
+  // "All" shows every civ's memory side by side, including the ones that have
+  // written nothing - an empty dossier is itself a finding, and two of four
+  // models in the first match kept no opponent models at all. Scrubbing with
+  // this open is how you watch four sets of notes diverge over a match.
+  if (showAll) {
+    $("dossier").innerHTML = picker + note + S.match.civs.map((c) => {
+      const d = S.dossiers?.[c.player_id];
+      const changed = !!(f.dossiers || {})[c.player_id];
+      // Clamped by default and openable, rather than clamped full stop. The
+      // summary is what makes four dossiers comparable at a glance; the full
+      // text is what makes any one of them worth reading, and truncating a
+      // model's own words with no way to see the rest is the one thing this
+      // panel should never do.
+      const open = S.dossierOpen === c.player_id;
+      // This civ's own previous notes, not the picker's. Passing the wrong
+      // one would mark every line "fresh" and turn the change highlighting
+      // into decoration.
+      const prev = S.dossiersBefore?.[c.player_id];
+      return `<div class="card ${open ? "open" : ""}" data-doc="${c.player_id}">
+        <div class="who">
+        <span class="dot" style="background:${CSS[c.colour]}"></span>${esc(c.model || c.civ_name)}
+        ${changed ? `<span class="edited">edited</span>` : ""}
+        <span class="meta">${d ? (open ? "▾" : "▸") : ""}</span></div>
+        ${!d ? `<p class="empty">Nothing written yet.</p>` : open ? `
+        <p><b>Doctrine.</b> ${esc(d.doctrine || "—")}</p>
+        ${(d.opponent_models || []).map((m) => `<p><b>${esc(nameOf(m.player_id))}</b>
+          <span class="trust ${m.trustworthiness}">${m.trustworthiness}</span><br>
+          ${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`).join("")
+          || `<p class="meta">no opponent models</p>`}
+        ${(d.standing_commitments || []).length ? `<p><b>Commitments.</b></p>
+          <ul>${list(d.standing_commitments, prev?.standing_commitments)}</ul>` : ""}
+        ${(d.lessons || []).length ? `<p><b>Lessons.</b></p>
+          <ul>${list(d.lessons, prev?.lessons)}</ul>` : ""}` : `
+        <p class="clamp">${esc(d.doctrine || "no doctrine")}</p>
+        <p class="meta">${(d.opponent_models || []).length
+            ? (d.opponent_models || []).map((m) =>
+                `${esc(nameOf(m.player_id))} <span class="trust ${m.trustworthiness}"
+                  >${m.trustworthiness}</span>`).join(" · ")
+            : "no opponent models"} ·
+          ${(d.standing_commitments || []).length} commitments ·
+          ${(d.lessons || []).length} lessons</p>`}</div>`;
+    }).join("");
+    $("dossier").onclick = dossierPick;
+    // How many civs revised their notes this turn - the reason to open a
+    // section you had shut, and the only summary that means anything when
+    // four dossiers are on screen at once.
+    const edits = S.match.civs.filter((c) => (f.dossiers || {})[c.player_id]).length;
+    return { label: edits ? `${edits} edited` : S.match.civs.length, hot: edits > 0 };
+  }
+  $("dossier").innerHTML = picker + (!doc ? `<div class="empty">Nothing written yet.</div>` : note + `
+    <div class="who"><span class="dot" style="background:${cssOf(who)}"></span>${nameOf(who)}
+      ${edited ? `<span class="edited">edited this turn</span>` : ""}</div>
+    <p class="${doc.doctrine !== was?.doctrine ? "fresh" : ""}"><b>Doctrine.</b>
+      ${esc(doc.doctrine || "—")}</p>
+    ${(doc.opponent_models || []).map((m) => {
+      const old = (was?.opponent_models || []).find((o) => o.player_id === m.player_id);
+      // The one line worth building all of this for. A model rewriting
+      // `trustworthiness: high` to `low` two turns after a betrayal is the
+      // whole experiment, and it is a single word in a single field.
+      const prior = S.priorTrust?.[who]?.[m.player_id];
+      const turned = prior && prior !== m.trustworthiness;
+      return `<p class="${old ? "" : "fresh"}"><b>${nameOf(m.player_id)}</b>
+        <span class="trust ${m.trustworthiness} ${turned ? "fresh" : ""}">${m.trustworthiness}</span>
+        ${turned ? `<span class="edited">was ${prior}</span>` : ""}
+        <br>${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`;
+    }).join("")}
+    ${(doc.standing_commitments || []).length ? `<p><b>Commitments.</b></p>
+      <ul>${list(doc.standing_commitments, was?.standing_commitments)}</ul>` : ""}
+    ${(doc.lessons || []).length ? `<p><b>Lessons.</b></p>
+      <ul>${list(doc.lessons, was?.lessons)}</ul>` : ""}`);
+  $("dossier").onclick = dossierPick;
+  return { label: doc ? (edited ? "edited" : "1") : 0, hot: edited };
+}
+
+function drawSignals() {
+  const f = S.frame;
+  const rows = S.match.civs.map((c) => {
+    const e = f.economy?.[c.player_id] || {};
+    const g = S.signals?.[c.player_id] || { said: 0, dm: 0, lostToWild: 0, sacked: 0,
+                                            met: new Set(), battles: 0 };
+    return { c, e, g };
+  });
+
+  // Bars are scaled against the strongest civ rather than against an absolute,
+  // because the question is always comparative: nobody cares that a civ makes
+  // nine science, they care that it makes half what the leader makes.
+  const peak = (pick) => Math.max(1, ...rows.map(({ e }) => pick(e) || 0));
+  const gold = peak((e) => e.gold_per_turn);
+  const food = peak((e) => e.food_surplus);
+  const sci = peak((e) => e.science_per_turn);
+  const prod = peak((e) => e.production_per_turn);
+  const talk = Math.max(1, ...rows.map(({ g }) => g.said));
+  const fights = Math.max(1, ...rows.map(({ g }) => g.fights));
+
+  const bar = (segments) => `<span class="bars">${segments.map(([w, cls, title]) =>
+    `<i class="${cls}" style="width:${Math.round(Math.max(0, Math.min(1, w)) * 100)}%"
+      title="${title}"></i>`).join("")}</span>`;
+
+  // A block per civ rather than a table row. Six columns in a 340px panel
+  // truncated every model name to "claude-ha", and a block leaves room to add
+  // signals without re-cutting the layout each time.
+  $("signals").innerHTML = rows.map(({ c, e, g }) => {
+    const units = e.units || 0;
+    const military = e.military || 0;
+    const hurt = g.lostToWild + g.sacked;
+    const tags = [
+      g.met.size ? `<span class="tag">met ${g.met.size}</span>` : "",
+      g.said ? `<span class="tag">${g.said} sent</span>` : "",
+      hurt ? `<span class="tag bad" title="${g.lostToWild} units lost, ${g.sacked} cities sacked"
+        >${hurt} to the wild</span>` : "",
+    ].join("");
+    return `<div class="sigrow">
+      <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${
+        esc(c.model || c.civ_name)}<span class="tags">${tags}</span></div>
+      <div class="metric"><label>economy</label>${bar([
+        [(e.food_surplus || 0) / food, "food", `${e.food_surplus || 0} food surplus/turn`],
+        [(e.gold_per_turn || 0) / gold, "gold", `${e.gold_per_turn || 0} gold/turn`],
+        [(e.science_per_turn || 0) / sci, "sci", `${e.science_per_turn || 0} science/turn`],
+        [(e.production_per_turn || 0) / prod, "prod", `${e.production_per_turn || 0} production/turn`],
+      ])}</div>
+      <div class="metric"><label>army</label>${bar([[units ? military / units : 0, "mil",
+        `${military} of ${units} units are military`]])}<span class="n">${military}/${units}</span></div>
+      <div class="metric ${g.fights ? "clickable" : ""}" data-combat="${c.player_id}">
+        <label>combat</label>${bar([
+          [(g.fights - g.wildFights) / fights, "war", `${g.fights - g.wildFights} against rivals`],
+          [g.wildFights / fights, "wild", `${g.wildFights} against the wilderness`],
+        ])}<span class="n">${g.kills}/${g.losses}</span></div>
+      <div class="metric"><label>talk</label>${bar([
+        [(g.said - g.dm) / talk, "pub", `${g.said - g.dm} public`],
+        [g.dm / talk, "dm", `${g.dm} private`],
+      ])}<span class="n">${g.said || "0"}</span></div>
+    </div>`;
+  }).join("") + `<div class="tick" style="margin-top:8px">economy is
+    <b class="k food">food</b> / <b class="k gold">gold</b> / <b class="k sci">science</b> /
+    <b class="k prod">production</b>, named in the order they are drawn -
+    each scaled against the strongest civ · army is the
+    <b class="k mil">military</b> share of units · talk is
+    <b class="k pub">public</b> / <b class="k dm">private</b> · the wild is
+    barbarians and wolves</div>`;
+
+  const pressure = rows.reduce((a, { g }) => a + g.lostToWild + g.sacked, 0);
+  badge("signals", pressure || S.match.civs.length, pressure > 0);
+
+  $("signals").onclick = (ev) => {
+    const row = ev.target.closest("[data-combat]");
+    if (!row) return;
+    const pid = row.dataset.combat;
+    S.combatOf = S.combatOf === pid ? null : pid;
+    drawSignals();
+  };
+  if (S.combatOf) {
+    const g = S.signals?.[S.combatOf];
+    const detail = (g?.log || []).slice().reverse().map((c) => {
+      const foe = c.mine === c.attacker ? c.defender : c.attacker;
+      const attacking = c.mine === c.attacker;
+      const mineDied = attacking ? c.attacker_died : c.defender_died;
+      const theirsDied = attacking ? c.defender_died : c.attacker_died;
+      const mineType = attacking ? c.attacker_type : c.defender_type;
+      const theirType = attacking ? c.defender_type : c.attacker_type;
+      const took = attacking ? c.attacker_damage : c.defender_damage;
+      const dealt = attacking ? c.defender_damage : c.attacker_damage;
+      return `<div class="fight ${mineDied ? "lost" : theirsDied ? "won" : ""}"
+        data-turn="${c.turn}">
+        <span class="meta">turn ${c.turn} · ${attacking ? "attacked" : "was attacked by"}</span>
+        <span class="dot" style="background:${cssOf(foe)}"></span>${esc(nameOf(foe))}
+        <div>${esc(mineType)} vs ${esc(theirType)} · dealt ${dealt}, took ${took}${
+          theirsDied ? " · <b class=\"k pub\">killed them</b>" : ""}${
+          mineDied ? " · <b class=\"k mil\">lost the unit</b>" : ""}</div></div>`;
+    }).join("") || `<div class="empty">No fights yet.</div>`;
+    $("signals").insertAdjacentHTML("beforeend",
+      `<div class="fights"><div class="who"><span class="dot"
+        style="background:${cssOf(S.combatOf)}"></span>${esc(nameOf(S.combatOf))} ·
+        every fight so far <button class="thread" data-combat="${S.combatOf}">close</button>
+        </div>${detail}</div>`);
+  }
+}
+
+/**
+ * The diplomacy console: one thread per relationship, the whole match at once.
+ *
+ * Selecting a message also shows what its sender was privately planning that
+ * same turn. That pairing is the point - it is the difference between reading
+ * what an agent *said* and reading what it *meant*, and it is the only way to
+ * see a model tell one civ it wants peace while telling itself to press an
+ * advantage. No separate deception panel needed; the comparison is the panel.
+ */
+async function drawDiplomacy(relationLines) {
+  const threads = await allMessages();
+  // A private thread is readable by exactly two civs. In agent mode a thread
+  // this civ is not part of does not exist.
+  const visible = [...threads].filter(([key, list]) =>
+    list.some((m) => m.turn <= S.turn) && (
+      S.mode !== "agent" || !S.focus || key === "public" || key.split("|").includes(S.focus)
+    )
+  );
+  if (!visible.length) {
+    $("messages").innerHTML = `<div class="empty">Nobody has spoken.</div>` +
+      (relationLines.length ? `<div style="margin-top:8px">${relationLines.join("")}</div>` : "");
+    return;
+  }
+  if (!visible.some(([key]) => key === S.thread)) S.thread = visible[0][0];
+
+  const chip = (pid) =>
+    `<span class="dot" style="background:${cssOf(pid)}"></span>${esc(nameOf(pid))}`;
+  const tabs = visible.map(([key, list]) => {
+    const sofar = list.filter((m) => m.turn <= S.turn);
+    // Whether anything landed here on the turn being viewed. A thread that just
+    // moved is the one worth opening, and finding it by clicking each tab in
+    // turn is not reading, it is searching.
+    const live = sofar.some((m) => m.turn === S.turn);
+    let label;
+    if (key === "public") {
+      label = "public";
+    } else {
+      // The arrow points from whoever spoke *last*, as of this turn - so a
+      // reply flips it. On turn 5 that reads gemini -> gpt because gemini
+      // opened; on turn 6 it reads gpt -> gemini because gpt answered, which
+      // is the fact you want without opening the thread.
+      //
+      // It used to be pinned to whoever opened the thread and never moved
+      // again, which is true and static: correct on turn 5 and stale for the
+      // fifteen turns after it.
+      const latest = sofar[sofar.length - 1] || list[0];
+      const from = latest.from;
+      const to = latest.to || key.split("|").find((p) => p !== from) || from;
+      label = `${chip(from)} <span class="arrow">→</span> ${chip(to)}`;
+    }
+    return `<button class="thread ${live ? "live" : ""}" data-key="${key}"
+      aria-pressed="${key===S.thread}"
+      >${label} <span class="meta">${sofar.length}</span></button>`;
+  }).join("");
+
+  // Up to and including this turn, never past it. Threading the whole match at
+  // once was the right instinct and the wrong scope: it meant standing on turn 1
+  // and reading a pact negotiated on turn 28. Every other panel here is "as of
+  // turn N" - the fog, the dossier fold, the cost fold - and this one silently
+  // was not, which spoils the replay and breaks the one question the scrubber
+  // exists to answer: what did they know, and when.
+  // Newest first. A negotiation is read from its live end - what was just said
+  // is what you are deciding about - and a chronological thread buries that
+  // under everything already known, further down the further the match runs.
+  const upToNow = (threads.get(S.thread) || []).filter((m) => m.turn <= S.turn).reverse();
+  const body = upToNow.length ? upToNow.map((m) => {
+    // Three things arrive in a thread and they are not the same act. A message
+    // is talk; a proposal is talk with a binding offer attached; a reply either
+    // signs it or does not. Labelling all three "private" hid the only part
+    // that changes the board.
+    const tag = m.kind === "proposal" ? `proposes ${esc(m.type || "terms")}`
+      : m.kind === "reply" ? (m.response === "accept" ? "accepts" : "declines")
+      : null;
+    return `<div class="msg ${m.channel} ${m.kind || "message"} ${
+      m.turn===S.turn?"now":""}" data-turn="${m.turn}">
+      <div class="meta"><span class="chan ${m.channel}">${
+        m.channel === "private" ? "private" : "public"}</span>${
+        tag ? ` <span class="chan ${m.kind} ${m.response||""}">${tag}</span>` : ""} turn ${m.turn} ·
+        <span class="dot" style="background:${cssOf(m.from)}"></span>${nameOf(m.from)}${
+        m.to ? ` → <span class="dot" style="background:${cssOf(m.to)}"></span>${nameOf(m.to)}`
+             : " · to everyone"}</div>${
+        // Said in so many words, because a blank space below a chip reads as a
+        // rendering failure rather than as a choice. A model signing a pact
+        // without comment is a real and slightly cold thing to have done, and
+        // the panel should say so rather than leave a gap.
+        m.text ? esc(m.text)
+               : `<span class="wordless">${m.kind === "reply"
+                    ? `signed without comment` : `sent with no note attached`}</span>`}
+      ${m.turn === S.turn && f_reasoning(m.from) ? `<div class="aside">
+        <b>its plan that turn:</b> ${esc(f_reasoning(m.from))}</div>` : ""}</div>`;
+  }).join("") : `<div class="empty">Nothing said in this thread yet.</div>`;
+
+  $("messages").innerHTML = `<div class="threads">${tabs}</div>${body}` +
+    (relationLines.length ? `<div style="margin-top:8px">${relationLines.join("")}</div>` : "");
+  $("messages").onclick = (ev) => {
+    const tab = ev.target.closest(".thread");
+    if (tab) { S.thread = tab.dataset.key; panels(); return; }
+    const msg = ev.target.closest(".msg[data-turn]");
+    // Clicking a message jumps the scrubber to it, which is what turns a
+    // transcript into a way of navigating the match.
+    if (msg && +msg.dataset.turn !== S.turn) show(+msg.dataset.turn);
+  };
+}
+
+/** The sender's own private plan on a given turn, if this frame carries it. */
+function f_reasoning(playerId) {
+  const r = S.frame?.reasoning?.[playerId];
+  return r ? (r.plan || r.assessment || "") : "";
 }
 
 async function show(turn) {
@@ -370,8 +1255,265 @@ function togglePlay() {
   }, 700);
 }
 
+/**
+ * The match library.
+ *
+ * `library.json` carries the facts, derived from each bundle and rebuildable at
+ * any time. Names and stars are *not* in it: a published bundle is a static
+ * directory with no write path, so persisting an annotation would mean either a
+ * server - which this viewer exists in order not to need - or a CLI nobody would
+ * run mid-scrub. They live in `localStorage` instead.
+ *
+ * That trade is worth stating plainly, because it is a real limitation rather
+ * than an implementation detail: a name you type is yours, in this browser, and
+ * does not travel with a match you publish or open elsewhere. For a lab notebook
+ * that is the right answer. For a shared catalogue it would not be, and the fix
+ * then is a real store rather than a bigger `localStorage` key.
+ */
+const NOTES_KEY = "arena4x.notes.v1";
+
+function notes() {
+  try {
+    return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}");
+  } catch {
+    // A corrupt key should cost the annotations, not the viewer.
+    return {};
+  }
+}
+
+function note(id, patch) {
+  const all = notes();
+  all[id] = { ...(all[id] || {}), ...patch };
+  try {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(all));
+  } catch {
+    /* private mode, or full. The list still works, it just forgets. */
+  }
+}
+
+async function loadLibrary() {
+  if (S.library) return S.library;
+  try {
+    const res = await fetch("library.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(String(res.status));
+    S.library = (await res.json()).matches || [];
+  } catch {
+    // Served straight from a single bundle, which is the published case. There
+    // is no shelf to go back to, so the title simply is not a button.
+    S.library = [];
+  }
+  return S.library;
+}
+
+function drawLibrary() {
+  const all = S.library || [];
+  const kept = notes();
+  const find = $("libFind").value.trim().toLowerCase();
+  const label = (m) => kept[m.path]?.name || m.id;
+  const hay = (m) =>
+    [label(m), m.id, ...(m.models || []), m.condition || "", m.winner_name || ""]
+      .join(" ")
+      .toLowerCase();
+
+  const shown = all
+    .filter((m) => !find || hay(m).includes(find))
+    // Starred first, then newest. Sorting starred to the top is the whole point
+    // of starring: a flat list re-sorted by date buries the match you keep
+    // coming back to under every experiment run since.
+    .sort((a, b) => {
+      const star = (kept[b.path]?.star ? 1 : 0) - (kept[a.path]?.star ? 1 : 0);
+      return star || String(b.finished_at).localeCompare(String(a.finished_at));
+    });
+
+  const dot = (name, i) =>
+    `<span class="dot" style="background:${CSS[i % CSS.length]}" title="${esc(name)}"></span>`;
+
+  $("libList").innerHTML =
+    shown
+      .map((m) => {
+        const starred = !!kept[m.path]?.star;
+        const here = m.path === BASE || `${m.path}/` === `${BASE}/`;
+        // A trailing "~" marks a date inferred from the file rather than
+        // recorded by the run. Shown as such instead of silently rounded, so a
+        // rebuilt bundle does not quietly claim to have been played today.
+        const approx = String(m.finished_at).endsWith("~");
+        const when = String(m.finished_at).replace("~", "").replace("T", " ").slice(0, 16);
+        const outcome = m.condition
+          ? `${esc(m.condition)}${m.winner_name ? ` → ${esc(m.winner_name)}` : ""}`
+          : "unfinished";
+        return `<div class="match ${here ? "here" : ""}" data-path="${esc(m.path)}">
+        <button class="star ${starred ? "on" : ""}" data-star="${esc(m.path)}"
+          aria-pressed="${starred}" title="${starred ? "Unstar" : "Star"}"
+          >${starred ? "★" : "☆"}</button>
+        <div>
+          <div class="title">${esc(label(m))}
+            <button class="rename" data-rename="${esc(m.path)}" title="Rename">rename</button>
+            ${here ? `<span class="meta">open</span>` : ""}</div>
+          <div class="who">${(m.models || []).map(dot).join("")}
+            <span class="sub">${(m.models || []).map(esc).join(" · ")}</span></div>
+          <div class="sub">${m.turns} turns · ${outcome}${
+            m.spent_usd != null ? ` · $${Number(m.spent_usd).toFixed(2)}` : ""
+          }</div>
+        </div>
+        <div class="right">${esc(when)}${approx ? `<br><span class="approx">from file</span>` : ""}
+          <br>seed ${m.seed ?? "?"}</div>
+      </div>`;
+      })
+      .join("") ||
+    `<div class="empty" style="padding:14px">${
+      all.length ? "Nothing matches that search." : "No matches indexed. Run <b>make library</b>."
+    }</div>`;
+}
+
+function openLibrary(show) {
+  $("libWrap").hidden = !show;
+  if (show) {
+    drawLibrary();
+    $("libFind").focus();
+  }
+}
+
+function wireLibrary() {
+  const shelf = (S.library || []).length;
+  // With nothing to switch to, the title is not a control. Better than a button
+  // that opens an empty box and teaches the visitor it does nothing.
+  if (!shelf) {
+    $("libBtn").querySelector(".caret").remove();
+    $("libBtn").removeAttribute("aria-haspopup");
+    return;
+  }
+  $("libBtn").onclick = () => openLibrary(true);
+  $("libClose").onclick = () => openLibrary(false);
+  $("libFind").oninput = drawLibrary;
+  // Click the backdrop, not the dialog. Closing on any click inside would make
+  // the search field unusable.
+  $("libWrap").onclick = (e) => e.target === $("libWrap") && openLibrary(false);
+  addEventListener("keydown", (e) => e.key === "Escape" && openLibrary(false));
+
+  $("libList").onclick = (e) => {
+    const star = e.target.closest("[data-star]");
+    if (star) {
+      const path = star.dataset.star;
+      note(path, { star: !notes()[path]?.star });
+      drawLibrary();
+      return;
+    }
+    const rename = e.target.closest("[data-rename]");
+    if (rename) {
+      const path = rename.dataset.rename;
+      const current = notes()[path]?.name || "";
+      // `prompt` deliberately. An inline editor here would be a text input, a
+      // commit key, an escape path and a blur rule - four behaviours to get
+      // right for a field used once per match. Not `confirm`/`alert`, which are
+      // the modal calls worth avoiding.
+      const next = window.prompt("Name this match", current);
+      if (next !== null) note(path, { name: next.trim() || undefined });
+      drawLibrary();
+      return;
+    }
+    const row = e.target.closest(".match[data-path]");
+    if (!row) return;
+    const path = row.dataset.path;
+    if (path === BASE) return openLibrary(false);
+    // A full navigation rather than swapping the data in place. Terrain, scatter
+    // and resources are built once at init from the match being viewed, so
+    // loading another one means rebuilding every layer plus resetting the
+    // camera, the fold caches, the thread selection and the scrubber. The URL
+    // already selects a match; letting it do so is both less code and shareable.
+    location.search = `?match=${encodeURIComponent(path)}`;
+  };
+}
+
+/**
+ * Tooltips, drawn rather than delegated to the browser.
+ *
+ * Every explained element already carries its text in `title`, which keeps it
+ * available to screen readers and to anyone reading the DOM - but the native
+ * bubble is unreliable exactly where it is needed here. It waits about a
+ * second, it renders wherever it likes, and on a column header at the right
+ * edge of a narrow panel it lands off-screen often enough that the honest
+ * description is "the cursor changes and nothing happens".
+ *
+ * Bound once on the panel by delegation, so anything gaining a `title` later
+ * gets this for free. `title` is moved to `data-tip` while hovered and put
+ * back on the way out, which suppresses the duplicate native bubble without
+ * losing the attribute.
+ */
+function tooltips(root) {
+  const tip = $("tip");
+  let held = null;
+
+  const place = (el) => {
+    const box = el.getBoundingClientRect();
+    // Laid out but not yet painted, so it can be measured before it is placed -
+    // otherwise the first frame appears at the previous tooltip's position.
+    tip.style.visibility = "hidden";
+    tip.classList.add("on");
+    const own = tip.getBoundingClientRect();
+    // Prefer below-left of the element, then flip up or in when that would
+    // leave the viewport. The panel is at the right edge, so the horizontal
+    // clamp is the one that actually fires.
+    const left = Math.max(8, Math.min(box.left, window.innerWidth - own.width - 8));
+    const below = box.bottom + 6;
+    const top = below + own.height > window.innerHeight - 8 ? box.top - own.height - 6 : below;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${Math.max(8, top)}px`;
+    tip.style.visibility = "";
+  };
+
+  const show = (el) => {
+    const text = el.getAttribute("title") || el.dataset.tip;
+    if (!text) return;
+    if (el.hasAttribute("title")) {
+      el.dataset.tip = text;
+      el.removeAttribute("title");
+    }
+    held = el;
+    tip.textContent = text;
+    tip.setAttribute("aria-hidden", "false");
+    place(el);
+  };
+
+  const hide = () => {
+    if (held?.dataset.tip) {
+      held.setAttribute("title", held.dataset.tip);
+      delete held.dataset.tip;
+    }
+    held = null;
+    tip.classList.remove("on");
+    tip.setAttribute("aria-hidden", "true");
+  };
+
+  root.addEventListener("mouseover", (ev) => {
+    const el = ev.target.closest("[title], [data-tip]");
+    if (el === held) return;
+    hide();
+    if (el && root.contains(el)) show(el);
+  });
+  root.addEventListener("mouseleave", hide);
+  // Scrolling the panel moves the anchor out from under a fixed-position
+  // bubble, which then points at the wrong row.
+  root.addEventListener("scroll", hide, true);
+}
+
 (async function init() {
-  S.match = await (await fetch(`${BASE}/match.json`)).json();
+  await loadLibrary();
+
+  // Served from a directory of runs rather than from inside one: there is no
+  // match at the root, so the library *is* the page. Without this the viewer
+  // threw on a missing match.json and showed a blank canvas, which is a
+  // confusing way to say "pick something".
+  const res = await fetch(`${BASE}/match.json`, { cache: "no-store" });
+  if (!res.ok) {
+    document.querySelector("aside").hidden = true;
+    document.querySelector(".scrub").hidden = true;
+    document.querySelector(".hint").hidden = true;
+    $("status").textContent = "Pick a match";
+    wireLibrary();
+    openLibrary(true);
+    return;
+  }
+  S.match = await res.json();
 
   staticLayer.add(buildTerrain(S.match.tiles, S.match.terrain));
   staticLayer.add(buildScatter(S.match.tiles, S.match.terrain));
@@ -389,26 +1531,82 @@ function togglePlay() {
   // it is tall, then back off a little so the board is not flush to the frame.
   const vFov = (camera.fov * Math.PI) / 180;
   const fit = extent / (2 * Math.tan(vFov / 2) * Math.min(1, camera.aspect)) * 1.15;
-  S.home = { target: new THREE.Vector3(cx, 0, cz), dist: fit };
+  // The opening camera, kept so "Reset view" can return to it exactly. Now that
+  // zooming follows the cursor it is very easy to end up somewhere odd, and
+  // "back to how it looked" needs to be one click rather than a hunt.
+  S.home = {
+    target: new THREE.Vector3(cx, 0, cz),
+    dist: fit,
+    eye: new THREE.Vector3(cx, fit * 0.72, cz + fit * 0.66),
+  };
   controls.target.copy(S.home.target);
-  camera.position.set(cx, fit * 0.72, cz + fit * 0.66);
+  camera.position.copy(S.home.eye);
   scene.fog.near = fit * 0.9;
   scene.fog.far = fit * 2.4;
 
-  $("modes").innerHTML = [["god","God"], ...S.match.civs.map((c)=>[`agent:${c.player_id}`, c.civ_name.split(" ")[0]])]
-    .map(([k,label]) => `<button data-mode="${k}" aria-pressed="${k==="god"}">${label}</button>`).join("");
-  $("modes").onclick = (e) => {
-    const b = e.target.closest("button"); if (!b) return;
+  // "All empires", not "God". The mode means the same thing - no fog, ground
+  // truth, every civ at once - and the old label was a word this project would
+  // rather not put on a page it publishes. It also described the *viewer*
+  // rather than the view; the civ options beside it name what you are looking
+  // through, so this one names it too.
+  const ALL = "All empires";
+  const dot = (c) => `<span class="dot" style="background:${CSS[c.colour]}"></span>`;
+  $("viewMenu").innerHTML = `
+    <div class="group">Fog of war</div>
+    <button role="menuitemradio" data-mode="god" data-label="${ALL}"
+      aria-checked="true">${ALL}</button>
+    ${S.match.civs.map((c) => `<button role="menuitemradio" data-mode="agent:${c.player_id}"
+      data-label="${esc(c.model || c.civ_name)}" aria-checked="false">${dot(c)}${
+      esc(c.model || c.civ_name)}</button>`).join("")}
+    <div class="group">Camera</div>
+    <button role="menuitem" data-camera="top">Top-down</button>
+    <button role="menuitem" data-camera="home">Reset view</button>`;
+
+  const closeMenu = () => {
+    $("viewMenu").hidden = true;
+    $("viewBtn").setAttribute("aria-expanded", "false");
+  };
+  $("viewBtn").onclick = (e) => {
+    e.stopPropagation();
+    const open = $("viewMenu").hidden;
+    $("viewMenu").hidden = !open;
+    $("viewBtn").setAttribute("aria-expanded", String(open));
+  };
+  // Dismissed by clicking anywhere else or by Escape. Both, because a menu that
+  // can only be closed by the button that opened it is a trap on a page whose
+  // main surface is a canvas you drag.
+  addEventListener("click", closeMenu);
+  addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+
+  $("viewMenu").onclick = (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.camera) {
+      controls.target.copy(S.home.target);
+      if (b.dataset.camera === "top") {
+        camera.position.set(S.home.target.x, S.home.dist * 1.05, S.home.target.z + 0.01);
+      } else {
+        camera.position.copy(S.home.eye);
+      }
+      controls.update();
+      closeMenu();
+      return;
+    }
     const [mode, who] = b.dataset.mode.split(":");
-    S.mode = mode; S.focus = who || null;
-    for (const x of $("modes").children) x.setAttribute("aria-pressed", x === b);
+    S.mode = mode;
+    S.focus = who || null;
+    for (const x of $("viewMenu").querySelectorAll("[data-mode]")) {
+      x.setAttribute("aria-checked", String(x === b));
+    }
+    $("viewNow").textContent = b.dataset.label;
+    closeMenu();
+    // The panels are fog-aware now, so a mode change has to redraw them too.
+    S.expanded = S.focus;
     drawTurn();
+    panels();
   };
-  $("top").onclick = () => {
-    controls.target.copy(S.home.target);
-    camera.position.set(S.home.target.x, S.home.dist * 1.05, S.home.target.z + 0.01);
-    controls.update();
-  };
+  tooltips(document.querySelector("aside"));
+  wireLibrary();
   $("slider").max = S.match.turns;
   $("slider").oninput = (e) => show(+e.target.value);
   $("prev").onclick = () => show(S.turn - 1);

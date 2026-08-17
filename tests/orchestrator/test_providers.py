@@ -120,6 +120,16 @@ def anthropic_client(monkeypatch: pytest.MonkeyPatch):
             async def __aexit__(self, *exc):
                 return False
 
+            # The adapter drains the events before asking for the assembled
+            # message, so that the stall guard has something to measure. A stub
+            # that is only awaitable would not exercise that path at all.
+            def __aiter__(self):
+                async def events():
+                    for kind in ("message_start", "content_block_delta", "message_stop"):
+                        yield Bag(type=kind)
+
+                return events()
+
             async def get_final_message(self):
                 return message
 
@@ -249,6 +259,58 @@ def fake_openai_sdk() -> types.ModuleType:
     return module
 
 
+def responses_stub(
+    response,
+    *,
+    seen: dict | None = None,
+    error: Exception | None = None,
+    completed: bool = True,
+):
+    """A stand-in for `client.responses`, offering the streaming surface.
+
+    The adapter streams so that a dead connection is caught by silence rather
+    than by the turn deadline, so a stub that only implements `create` tests a
+    path production no longer takes.
+    """
+
+    class Stream:
+        def __init__(self, **request):
+            self._request = request
+            self.completed = completed
+
+        async def __aenter__(self):
+            if seen is not None:
+                seen.update(self._request)
+            if error is not None:
+                raise error
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def __aiter__(self):
+            async def events():
+                yield Bag(type="response.created", response=None)
+                yield Bag(type="response.output_text.delta", response=None)
+                # The terminal event carries the response, whether the stream
+                # completed or ran out of output budget.
+                yield Bag(
+                    type="response.completed" if self.completed else "response.incomplete",
+                    response=response,
+                )
+
+            return events()
+
+        async def get_final_response(self):
+            # Matches the SDK: it refuses to assemble a response for a stream
+            # that ended any way other than completed.
+            if not self.completed:
+                raise RuntimeError("Didn't receive a `response.completed` event")
+            return response
+
+    return Bag(stream=lambda **kw: Stream(**kw), close=_noop)
+
+
 async def test_openai_uses_the_responses_api_not_chat_completions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -260,21 +322,18 @@ async def test_openai_uses_the_responses_api_not_chat_completions(
     client = OpenAIClient(api_key="x")
     seen: dict[str, Any] = {}
 
-    async def create(**request):
-        seen.update(request)
-        return Bag(
-            output_text='{"orders": []}',
-            status="completed",
-            output=[],
-            usage=Bag(
-                input_tokens=6000,
-                output_tokens=1500,
-                input_tokens_details=Bag(cached_tokens=5800),
-                output_tokens_details=Bag(reasoning_tokens=900),
-            ),
-        )
-
-    client._client = Bag(responses=Bag(create=create), close=_noop)
+    response = Bag(
+        output_text='{"orders": []}',
+        status="completed",
+        output=[Bag(type="reasoning", summary=[Bag(text="weighing the east")])],
+        usage=Bag(
+            input_tokens=6000,
+            output_tokens=1500,
+            input_tokens_details=Bag(cached_tokens=5800),
+            output_tokens_details=Bag(reasoning_tokens=900),
+        ),
+    )
+    client._client = Bag(responses=responses_stub(response, seen=seen), close=_noop)
     turn = await client.complete("system", "user", SCHEMA)
 
     assert seen["text"]["format"]["type"] == "json_schema"
@@ -284,6 +343,10 @@ async def test_openai_uses_the_responses_api_not_chat_completions(
     assert turn.usage.reasoning_tokens == 900
     # Reasoning is inside the output count; it must not be added on top.
     assert turn.usage.output_tokens == 1500
+    # The summary has to be *requested* or the reasoning items come back empty
+    # and the trace is billed, spent and discarded.
+    assert seen["reasoning"]["summary"] == "auto"
+    assert turn.thinking == "weighing the east", "the trace was parsed and dropped"
 
 
 async def test_openai_surfaces_a_refusal_block(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -293,15 +356,13 @@ async def test_openai_surfaces_a_refusal_block(monkeypatch: pytest.MonkeyPatch) 
 
     client = OpenAIClient(api_key="x")
 
-    async def create(**request):
-        return Bag(
-            output_text="",
-            status="completed",
-            output=[Bag(content=[Bag(type="refusal", refusal="cannot help")])],
-            usage=Bag(),
-        )
-
-    client._client = Bag(responses=Bag(create=create), close=_noop)
+    response = Bag(
+        output_text="",
+        status="completed",
+        output=[Bag(content=[Bag(type="refusal", refusal="cannot help")])],
+        usage=Bag(),
+    )
+    client._client = Bag(responses=responses_stub(response), close=_noop)
     with pytest.raises(Refused, match="cannot help"):
         await client.complete("system", "user", SCHEMA)
 
@@ -490,3 +551,103 @@ async def test_the_scripted_provider_fails_on_cue_then_succeeds() -> None:
             await client.complete("s", "u", SCHEMA)
     turn = await client.complete("s", "u", SCHEMA)
     assert turn.text == '{"orders": []}'
+
+
+# ---------------------------------------------------------------------------
+# Usage accounting
+# ---------------------------------------------------------------------------
+
+
+def test_every_adapter_reports_uncached_input_not_total() -> None:
+    """`Usage.input_tokens` excludes the cached portion. On every vendor.
+
+    The pricer charges `input * 1.0 + cache_read * 0.1`, so a seat that reports
+    a total where the others report a remainder pays 1.1x for tokens that
+    should cost 0.1x - eleven times over on the cached share. The OpenAI
+    Responses adapter did exactly that, and nothing caught it: the number was
+    plausible, the seat was already the expensive one, and the only visible
+    symptom was a cache-rate column whose four seats were not measuring the
+    same quantity.
+
+    Asserted across all four surfaces at once, because the contract is only
+    worth anything if it holds everywhere. Two of the four already got this
+    right and said so in a comment, which is precisely why a comment is not
+    a test.
+    """
+    from arena_orchestrator.providers.anthropic_provider import _usage as anthropic_usage
+    from arena_orchestrator.providers.google_provider import _usage as google_usage
+    from arena_orchestrator.providers.openai_provider import (
+        _completions_usage,
+        _responses_usage,
+    )
+
+    cases = {
+        "anthropic": anthropic_usage(
+            Bag(input_tokens=300, output_tokens=50, cache_read_input_tokens=700)
+        ),
+        "openai": _responses_usage(
+            Bag(
+                input_tokens=1000,
+                output_tokens=50,
+                input_tokens_details=Bag(cached_tokens=700),
+            )
+        ),
+        "xai": _completions_usage(
+            Bag(
+                prompt_tokens=1000,
+                completion_tokens=50,
+                prompt_tokens_details=Bag(cached_tokens=700),
+            )
+        ),
+        "google": google_usage(
+            Bag(total_input_tokens=1000, total_output_tokens=50, total_cached_tokens=700)
+        ),
+    }
+    for name, usage in cases.items():
+        assert usage.cache_read_tokens == 700, name
+        assert usage.input_tokens == 300, (
+            f"{name} reports {usage.input_tokens} uncached input tokens for a 1000-token "
+            f"prompt of which 700 were cached. Either it is double-counting the cached "
+            f"portion or it is not reporting it at all."
+        )
+        assert usage.input_tokens + usage.cache_read_tokens == 1000, name
+
+
+async def test_openai_an_incomplete_stream_is_retryable_not_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression that cost one seat 41% of its turns on a live run.
+
+    Reasoning is billed against `max_output_tokens`, so a model thinking hard
+    about a late board exhausts the cap and the response comes back
+    `incomplete`. Non-streaming `create()` returned that as an object, and the
+    status check below turned it into a retryable `Malformed` with a diagnosis
+    attached. Switching to streaming for the stall guard changed nothing about
+    that path except *how the object is obtained* - and
+    `get_final_response()` raises rather than returns for any stream that did
+    not complete, which made a recoverable condition fatal and then tripped the
+    circuit breaker on top.
+
+    The fix reads the response off the terminal event instead. The assertion
+    that matters is the error *class*: fatal means the agent passes and the
+    breaker counts it, retryable means it tries again.
+    """
+    monkeypatch.setitem(sys.modules, "openai", fake_openai_sdk())
+    from arena_orchestrator.providers.openai_provider import OpenAIClient
+
+    client = OpenAIClient(api_key="x")
+    truncated = Bag(
+        output_text="",
+        status="incomplete",
+        incomplete_details=Bag(reason="max_output_tokens"),
+        output=[],
+        usage=Bag(output_tokens=32000, input_tokens=9000),
+    )
+    client._client = Bag(responses=responses_stub(truncated, completed=False), close=_noop)
+
+    with pytest.raises(Malformed, match="incomplete") as caught:
+        await client.complete("system", "user", SCHEMA)
+    assert caught.value.retryable is True, "a truncated response must be worth retrying"
+    # The diagnosis is the useful half: without it this reads as an empty body
+    # and sends you to the schema, which is where an hour went the first time.
+    assert "reasoning is billed against this cap" in str(caught.value)

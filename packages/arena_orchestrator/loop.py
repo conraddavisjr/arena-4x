@@ -27,19 +27,20 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from arena_replay import BundleWriter
 
 from arena_engine import observation as obs
-from arena_engine.actions import Action
+from arena_engine.actions import Action, pass_turn
 from arena_engine.events import Event
 from arena_engine.reducer import new_match, step
-from arena_engine.types import State
+from arena_engine.types import MatchConfig, State
 
 from . import journal as jl
-from .agent import Agent
+from .agent import Agent, Outcome
 from .budget import Allowance, Ledger
 from .config import RunConfig
 from .dialects import for_provider
@@ -49,6 +50,40 @@ from .providers.base import LLMClient, Usage
 from .resilience import CircuitBreaker, Sleeper, TokenBucket
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json"
+
+
+def _now() -> str:
+    """UTC, to the second, ISO 8601.
+
+    The only clock reading anywhere near the journal. Everything else here is
+    deliberately time-free, because determinism comes from the seed and the
+    recorded decisions and a replay that depended on when it ran would not be
+    one. This is metadata *about* a run - it sits outside the state hash, resume
+    never reads it back, and rebuilding a bundle does not change it.
+
+    It exists because nothing knew when a match happened, which is fine for a
+    replay and useless for a library of them.
+    """
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+# Which adapters read a token stream, and therefore can tell a model thinking
+# from a connection that has stopped talking. Recorded as a set rather than an
+# `if` so the next vendor to gain a stream is an entry here, not a branch - and
+# so that the seats *without* one are visible rather than assumed.
+#
+# Google is the omission. Its interactions surface exposes no token stream, so
+# that seat still depends on the transport timeout and the turn backstop.
+STREAMING_PROVIDERS = frozenset({"anthropic", "openai"})
+
+# What each vendor calls the reasoning dial. The names differ, the intent does
+# not, and keeping the mapping here means the match sets it once.
+EFFORT_PARAM = {
+    "anthropic": "effort",
+    "openai": "reasoning_effort",
+    "xai": "reasoning_effort",
+    "google": "effort",
+}
 
 
 @dataclass
@@ -81,6 +116,8 @@ class Orchestrator:
     _recent: dict[str, list[str]] = field(default_factory=dict)
     # Retries absorbed since the last turn boundary, drained into the journal.
     _retries: list[dict[str, Any]] = field(default_factory=list)
+    # This turn's cost per civ, drained into the frame when the turn resolves.
+    _spend: dict[str, Any] = field(default_factory=dict)
 
     @property
     def bundle_root(self) -> Path:
@@ -103,9 +140,21 @@ class Orchestrator:
         self._buckets: dict[str, TokenBucket] = {}
         self._breakers: dict[str, CircuitBreaker] = {}
         self.agents: dict[str, Agent] = {}
+        effort = self.config.reasoning_effort
         for seat in self.config.seats:
+            # The stall gap is match policy rather than seat configuration, so it
+            # comes from the run config - but a seat may still override it, and a
+            # vendor whose adapter cannot stream simply does not accept it.
+            options = dict(seat.options)
+            if seat.provider in STREAMING_PROVIDERS:
+                options.setdefault("stall_gap_s", self.config.stall_gap_s)
+            # Every vendor takes it under a different name, and every vendor now
+            # takes it. A seat may still override, which is how an experiment
+            # that *wants* asymmetry asks for it explicitly rather than
+            # inheriting it from whichever defaults happened to disagree.
+            options.setdefault(EFFORT_PARAM.get(seat.provider, "effort"), effort)
             client = (self.clients or {}).get(seat.player_id) or build_client(
-                seat.provider, seat.model, **seat.options
+                seat.provider, seat.model, **options
             )
             self.agents[seat.player_id] = Agent(
                 player_id=seat.player_id,
@@ -165,14 +214,21 @@ class Orchestrator:
 
         journal = Journal.open(self.root, resume=bool(recovered))
         match_id = (recovered.match_id if recovered else None) or self.config.match_id
-        state, events = new_match(match_id, self.config.seed, self.config.roster, self.config.match)
+        # A recovered config wins over the configured one for the same reason
+        # the recovered match id does: it is what the recorded decisions were
+        # made under, and anything else replays to a different board.
+        match_config = self.config.match
+        if recovered and recovered.match_config:
+            match_config = MatchConfig.model_validate(recovered.match_config)
+        state, events = new_match(match_id, self.config.seed, self.config.roster, match_config)
         # The bundle goes in its own subdirectory, apart from the journal and
         # the transcripts. Those live in the run root and the bundle is what
         # gets published - and they were all in one directory, which meant
         # serving a match served the system prompts with it. The one property
         # a published match has to have is that it carries nothing but the
         # match, and "remember to exclude two files" is not that property.
-        writer = BundleWriter.start(self.bundle_root, state) if self.bundle else None
+        models = {seat.player_id: seat.model or seat.provider for seat in self.config.seats}
+        writer = BundleWriter.start(self.bundle_root, state, models) if self.bundle else None
 
         if recovered:
             # Before anything is spent: the cap belongs to the match, not to
@@ -189,8 +245,21 @@ class Orchestrator:
                 0,
                 match_id=match_id,
                 seed=self.config.seed,
+                # The whole config, not just the seed. `MatchConfig` is part of
+                # `State` and therefore part of the state hash, so a resume that
+                # rebuilt it from defaults - or from whatever flags the operator
+                # happened to retype - reproduces a different match. Resume was
+                # only working because the same `--turns` was passed by hand.
+                match_config=self.config.match.model_dump(mode="json"),
                 seats=[seat.to_json() for seat in self.config.seats],
                 state_hash=state.state_hash(),
+                # Wall-clock, purely for the humans. The journal is otherwise
+                # deliberately time-free - determinism comes from the seed and
+                # the recorded decisions, and a replay must not depend on when
+                # it happened - so this is metadata *about* the run rather than
+                # an input to it. Nothing reads it back during resume, and it
+                # sits outside the state hash.
+                started_at=_now(),
             )
 
         failures = 0
@@ -219,7 +288,8 @@ class Orchestrator:
                     state_hash=state.state_hash(),
                 )
                 if writer:
-                    writer.add(state, events)
+                    writer.add(state, events, self._spend)
+                self._spend = {}
 
                 if self.ledger.exhausted:
                     reason = "budget_cap"
@@ -234,9 +304,15 @@ class Orchestrator:
                 reason=reason,
                 winner=winner,
                 spent_usd=round(self.ledger.spent_usd, 4),
+                finished_at=_now(),
             )
             if writer:
-                writer.finish(state, {"winner": winner, "reason": reason})
+                writer.finish(
+                    state,
+                    {"winner": winner, "reason": reason},
+                    finished_at=_now(),
+                    spent_usd=round(self.ledger.spent_usd, 4),
+                )
             return MatchResult(state, reason, winner, self.ledger, failures)
         finally:
             journal.close()
@@ -249,10 +325,25 @@ class Orchestrator:
         living = [pid for pid in state.civ_ids() if state.players[pid].alive]
         prompts = {pid: self._observation(state, pid) for pid in living}
 
-        results = await asyncio.gather(
-            *(self.agents[pid].take_turn(prompts[pid]) for pid in living)
-        )
-        outcomes = dict(zip(living, results, strict=True))
+        # A civ that has spent its token allowance stops being asked. This is
+        # what makes the allowance an in-game constraint rather than a number
+        # printed in the observation: without it the countdown reached zero and
+        # nothing whatsoever happened, which is how it stood - `exhausted()` was
+        # written, tested, and never called.
+        #
+        # It passes rather than being eliminated. A civ that vanishes hands its
+        # cities to nobody and rewrites the board for the other three, which
+        # would make the *other* seats' results depend on when this one ran dry.
+        # A civ that can no longer act is still a real player, still holds
+        # territory, and gets outcompeted in public - which is both a fairer
+        # consequence and far better evidence.
+        broke = [pid for pid in living if self.allowance and self.allowance.exhausted(pid)]
+        asked = [pid for pid in living if pid not in broke]
+
+        results = await asyncio.gather(*(self.agents[pid].take_turn(prompts[pid]) for pid in asked))
+        outcomes = dict(zip(asked, results, strict=True))
+        for pid in broke:
+            outcomes[pid] = Outcome(action=pass_turn(), failure="token allowance exhausted")
 
         actions: dict[str, Action] = {}
         for player_id, outcome in outcomes.items():
@@ -264,6 +355,14 @@ class Orchestrator:
         agent = self.agents[player_id]
         for turn in outcome.turns:
             cost = self.ledger.charge(player_id, turn.model, turn.usage)
+            row = self._spend.setdefault(
+                player_id, {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0}
+            )
+            row["usd"] = round(row["usd"] + cost, 6)
+            row["input"] += turn.usage.input_tokens
+            row["output"] += turn.usage.output_tokens
+            row["cached"] += turn.usage.cache_read_tokens
+            row["ms"] += turn.latency_ms
             if self.allowance:
                 self.allowance.charge(player_id, turn.usage)
             journal.append(
@@ -282,8 +381,17 @@ class Orchestrator:
                 cost_usd=round(cost, 6),
                 latency_ms=turn.latency_ms,
                 stop_reason=turn.stop_reason,
+                # The trace itself goes to the transcripts; its size goes here,
+                # so "is this seat's reasoning being captured at all" is a
+                # question the journal can answer. A seat billing thousands of
+                # reasoning tokens while storing none of them is a real state
+                # and one worth being able to see without opening 80 payloads.
+                reasoning_tokens=turn.usage.reasoning_tokens,
+                thinking_chars=len(turn.thinking or ""),
             )
-            journal.transcript(state.turn + 1, player_id, agent.system, user, turn.text)
+            journal.transcript(
+                state.turn + 1, player_id, agent.system, user, turn.text, turn.thinking
+            )
 
         # A cache that never reads costs 12.5x the input price of the prefix and
         # fails nothing. Tests can miss it - one did, for a whole live match -

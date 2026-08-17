@@ -15,7 +15,9 @@ from arena_engine.types import State
 BUNDLE_VERSION = 1
 
 
-def match_metadata(state: State, tile_order: list[str]) -> dict[str, Any]:
+def match_metadata(
+    state: State, tile_order: list[str], models: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Everything that is fixed for the whole match, written once.
 
     `tiles` is the ordered terrain array every later frame indexes into. Terrain
@@ -36,6 +38,17 @@ def match_metadata(state: State, tile_order: list[str]) -> dict[str, Any]:
                 # and the reasoning columns all agree without the viewer having
                 # to invent a mapping.
                 "colour": index,
+                # Which model played this seat. Carried so a published replay
+                # says who was actually competing - a civ name is fiction, and
+                # the whole point of the match is the comparison.
+                #
+                # Deliberately *not* the civ name the agents are given. That
+                # string goes into the system prompt, so naming a civ after its
+                # model would tell every agent which model it is and show the
+                # others too. Whether a model plays differently when it knows it
+                # is Opus facing Grok is a genuinely interesting question, and it
+                # is not the one the baseline run is asking.
+                "model": (models or {}).get(pid),
             }
             for index, pid in enumerate(state.civ_ids())
         ],
@@ -87,12 +100,18 @@ def _economy(state: State, player_id: str) -> dict[str, Any]:
     }
 
 
+def _dossiers(state: State) -> dict[str, Any]:
+    return {pid: state.players[pid].dossier.model_dump(mode="json") for pid in state.civ_ids()}
+
+
 def turn_frame(
     state: State,
     events: list[Event],
     index: dict[str, int],
     previous_owners: dict[str, str | None] | None = None,
     previous_improvements: dict[str, str] | None = None,
+    previous_dossiers: dict[str, Any] | None = None,
+    spend: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One turn of the replay.
 
@@ -120,8 +139,31 @@ def turn_frame(
         if previous_improvements is None or previous_improvements.get(k) != v
     }
 
+    # A delta, like owners and improvements, and for the same reason twice over.
+    # A dossier is capped at roughly 2000 tokens and most turns an agent changes
+    # one line of it, so repeating four of them every frame would dominate the
+    # bundle. It also happens to be exactly the shape the viewer wants: the
+    # thing worth watching is not the dossier, it is the *edit* - a model
+    # rewriting `trustworthiness: high` to `low` two turns after a betrayal is
+    # this whole experiment in one field.
+    dossiers = _dossiers(state)
+    changed = {
+        pid: d
+        for pid, d in dossiers.items()
+        if previous_dossiers is None or previous_dossiers.get(pid) != d
+    }
+
     return {
         "turn": state.turn,
+        "dossiers": changed,
+        # What this turn cost, per civ. Belongs in the bundle rather than only
+        # in the journal because "score gained per 100k tokens" is the closest
+        # thing this experiment has to a headline result, and a published replay
+        # that cannot show it is missing the comparison it exists to make.
+        #
+        # Safe to publish: token counts and dollars describe the match, not the
+        # prompts. Nothing here reveals what was sent.
+        "spend": spend or {},
         "units": [
             {
                 "id": u.id,
@@ -157,9 +199,25 @@ def turn_frame(
         "contact": {pid: sorted(seen) for pid, seen in state.contact.items()},
         "economy": {pid: _economy(state, pid) for pid in state.civ_ids()},
         "relations": {
-            key: {"state": rel.state.value, "since": rel.since_turn}
+            # `pact_until` was dropped here, and dropping it made the entire
+            # treaty system invisible. A non-aggression pact does not change the
+            # relation *state* - two civs at peace with a pact are still
+            # `neutral` - so a bundle carrying only the state showed nothing
+            # while three pacts were signed, one expired, and five proposals
+            # were exchanged. It looked like the agents were ignoring the
+            # diplomacy mechanics; they were using them fluently.
+            key: {
+                "state": rel.state.value,
+                "since": rel.since_turn,
+                "pact_until": rel.pact_until,
+            }
             for key, rel in sorted(state.relations.items())
         },
+        # Combat, structured. The event ticker can say a fight happened; only
+        # this can say who fought, what it cost and who is bleeding. It is what
+        # turns "haiku suddenly lost half its army on turn 15" from something
+        # you notice by accident into something the panel tells you.
+        "combat": _combat(events),
         "reasoning": _reasoning(events),
         "messages": _messages(state, events),
         "events": [
@@ -177,7 +235,43 @@ def turn_frame(
 
 # Event types that would swamp the ticker without telling a spectator anything.
 # Movement is already visible on the board; rejected orders are debugging detail.
-_NOISE = frozenset({"turn_started", "turn_ended", "unit_moved", "order_rejected", "agent_action"})
+_NOISE = frozenset(
+    {
+        "turn_started",
+        "turn_ended",
+        "unit_moved",
+        "order_rejected",
+        "agent_action",
+        # The reply's *words* belong in the diplomacy thread, and go there. As a
+        # ticker line it only ever restates the `treaty_signed` or
+        # `proposal_rejected` sitting directly above it: "grok accepted gemini's
+        # non_aggression proposal" followed by "grok answered gemini" is one
+        # event reported twice.
+        "proposal_answered",
+    }
+)
+
+
+def _combat(events: list[Event]) -> list[dict[str, Any]]:
+    """Every blow struck this turn, with both sides named."""
+    out: list[dict[str, Any]] = []
+    for e in events:
+        if e.type != "combat_resolved" or "attacker_type" not in e.payload:
+            continue
+        out.append(
+            {
+                "attacker": e.actor,
+                "defender": e.payload.get("defender_owner"),
+                "attacker_type": e.payload.get("attacker_type"),
+                "defender_type": e.payload.get("defender_type"),
+                "attacker_damage": e.payload.get("attacker_damage", 0),
+                "defender_damage": e.payload.get("defender_damage", 0),
+                "attacker_died": bool(e.payload.get("attacker_died")),
+                "defender_died": bool(e.payload.get("defender_died")),
+                "text": e.text,
+            }
+        )
+    return out
 
 
 def _reasoning(events: list[Event]) -> dict[str, Any]:
@@ -196,6 +290,17 @@ def _reasoning(events: list[Event]) -> dict[str, Any]:
     return out
 
 
+# What counts as something a civ *said*. A proposal's covering note and the
+# reply to it are negotiation in exactly the way a DM is, and gathering only
+# `message_sent` was why a match full of pacts read as "Nobody has spoken":
+# models put their diplomacy in the proposal, not beside it.
+SPOKEN = {
+    "message_sent": "message",
+    "proposal_made": "proposal",
+    "proposal_answered": "reply",
+}
+
+
 def _messages(state: State, events: list[Event]) -> list[dict[str, Any]]:
     """Everything said this turn, public and private.
 
@@ -208,13 +313,26 @@ def _messages(state: State, events: list[Event]) -> list[dict[str, Any]]:
         {
             "from": e.actor,
             "to": e.payload.get("to"),
-            "channel": e.payload.get("channel", "public"),
+            # A proposal and its reply are addressed to one civ by construction,
+            # so they are private whatever the payload says. Only `send_message`
+            # can be a broadcast.
+            "channel": e.payload.get("channel", "private" if kind != "message" else "public"),
+            "kind": kind,
             # The message body is in the payload; `e.text` is the ticker line
             # ("Aurelian Compact sent a private message"), not the content.
             "text": e.payload.get("text", ""),
+            # Only on a reply, and it is the half that carries the meaning: the
+            # same words follow an acceptance and a refusal.
+            **({"response": e.payload["response"]} if "response" in e.payload else {}),
+            **({"type": e.payload["type"]} if kind == "proposal" else {}),
         }
         for e in events
-        if e.type == "message_sent"
+        # A message needs words - an empty chat bubble says nothing. A proposal
+        # or a reply does not: the act is the content. A civ that accepted a
+        # ten-turn pact in silence still bound itself, and requiring prose here
+        # meant the treaty showed up in the relations bar with nothing in the
+        # thread to account for it.
+        if (kind := SPOKEN.get(e.type)) and (kind != "message" or e.payload.get("text"))
     ]
 
 
@@ -233,28 +351,36 @@ class BundleWriter:
     frames: list[dict[str, Any]] = field(default_factory=list)
     _previous_owners: dict[str, str | None] | None = None
     _previous_improvements: dict[str, str] | None = None
+    _previous_dossiers: dict[str, Any] | None = None
 
     @classmethod
-    def start(cls, root: Path, state: State) -> BundleWriter:
+    def start(cls, root: Path, state: State, models: dict[str, str] | None = None) -> BundleWriter:
         tile_order = sorted(state.tiles)
         return cls(
             root=root,
-            metadata=match_metadata(state, tile_order),
+            metadata=match_metadata(state, tile_order, models),
             index={key: i for i, key in enumerate(tile_order)},
         )
 
-    def add(self, state: State, events: list[Event]) -> None:
+    def add(self, state: State, events: list[Event], spend: dict[str, Any] | None = None) -> None:
         self.frames.append(
             turn_frame(
-                state, events, self.index, self._previous_owners, self._previous_improvements
+                state,
+                events,
+                self.index,
+                self._previous_owners,
+                self._previous_improvements,
+                self._previous_dossiers,
+                spend,
             )
         )
         self._previous_owners = {k: t.owner for k, t in state.tiles.items()}
         self._previous_improvements = {
             k: t.improvement.value for k, t in state.tiles.items() if t.improvement is not None
         }
+        self._previous_dossiers = _dossiers(state)
 
-    def finish(self, state: State, stats: dict[str, Any] | None = None) -> Path:
+    def finish(self, state: State, stats: dict[str, Any] | None = None, **about: Any) -> Path:
         turns = self.root / "turns"
         turns.mkdir(parents=True, exist_ok=True)
 
@@ -264,6 +390,12 @@ class BundleWriter:
         self.metadata["turns"] = len(self.frames)
         self.metadata["final_turn"] = state.turn
         self.metadata["victory"] = state.victory.model_dump(mode="json") if state.victory else None
+        # Facts about the run rather than about the match: when it finished, what
+        # it cost. They belong in the bundle because the bundle is the thing that
+        # gets served and listed, and a library that had to open a journal to
+        # date an entry would need the journal published alongside it - which is
+        # exactly what the bundle exists to avoid.
+        self.metadata.update({k: v for k, v in about.items() if v is not None})
         (self.root / "match.json").write_text(_dump(self.metadata))
         (self.root / "stats.json").write_text(_dump(stats or {}))
         return self.root

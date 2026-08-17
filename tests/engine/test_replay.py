@@ -240,3 +240,211 @@ def test_civ_colours_are_stable_and_distinct(bundle) -> None:
     root, _ = bundle
     colours = [c["colour"] for c in read(root, "match.json")["civs"]]
     assert sorted(colours) == list(range(len(colours)))
+
+
+def test_folding_dossier_deltas_reproduces_what_each_agent_wrote(bundle) -> None:
+    """The dossier is written as a delta for the same reason borders are, and it
+    has the same failure mode: a dropped one renders wrong many turns later with
+    nothing failing at the time.
+
+    It is also the artifact the lab exists to read. An agent's dossier is the
+    only thing it carries between turns that it authored itself, so a bundle
+    that reconstructs it incorrectly misrepresents the one record of what the
+    model believed.
+    """
+    root, state = bundle
+    folded: dict[str, dict] = {}
+    for turn in sorted(int(f.stem) for f in (root / "turns").glob("*.json")):
+        folded.update(frame(root, turn).get("dossiers") or {})
+
+    truth = {pid: state.players[pid].dossier.model_dump(mode="json") for pid in state.civ_ids()}
+    assert folded == truth
+
+
+def test_a_whole_negotiation_reaches_the_frame_not_just_chat() -> None:
+    """A proposal's covering note and its reply are things a civ *said*.
+
+    They were not in the bundle, because `_messages` gathered `message_sent`
+    alone - and models put almost all of their diplomacy in a proposal's
+    `message` rather than beside it in a separate send. The result was a match
+    whose civs signed non-aggression pacts every few turns rendering in the
+    viewer as "Nobody has spoken", which is not a missing feature but a
+    positive falsehood about what happened.
+    """
+    from arena_replay.bundle import _messages
+
+    from arena_engine.actions import Action, Propose, RespondToProposal, pass_turn
+    from arena_engine.types import ProposalType, Terms
+
+    state, _ = new_match("t", 4, ROSTER, MatchConfig(turn_limit=45))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p1"] = Action(
+        diplomacy=[
+            Propose(
+                action="propose",
+                to="p2",
+                type=ProposalType.NON_AGGRESSION,
+                terms=Terms(duration_turns=10),
+                message="Greetings gemini-3.6-flash. Let us keep the frontier quiet.",
+            )
+        ]
+    )
+    state, events = step(state, actions)
+    said = _messages(state, events)
+    assert [m["kind"] for m in said] == ["proposal"]
+    assert said[0]["text"].startswith("Greetings")
+    assert said[0]["to"] == "p2", "a proposal is addressed, so it threads like a DM"
+    assert said[0]["channel"] == "private"
+
+    pid = next(iter(state.proposals))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p2"] = Action(
+        diplomacy=[
+            RespondToProposal(
+                action="respond_to_proposal",
+                proposal_id=pid,
+                response="accept",
+                message="Accepted. Let us both expand westward in peace.",
+            )
+        ]
+    )
+    state, events = step(state, actions)
+    reply = [m for m in _messages(state, events) if m["kind"] == "reply"]
+    assert len(reply) == 1, "the answer is the other half of the exchange"
+    assert reply[0]["response"] == "accept", "the same words follow a yes and a no"
+    assert reply[0]["to"] == "p1"
+    assert any(e.type == "treaty_signed" for e in events), "the outcome still fires separately"
+
+
+def test_a_wordless_proposal_and_reply_still_appear() -> None:
+    """The act is the content. Prose is optional and silence is a finding.
+
+    `respond_to_proposal.message` is optional and models use that: one signed a
+    ten-turn non-aggression pact with `message: null`. An earlier version of
+    this suppressed wordless entries on the reasoning that an empty chat bubble
+    is worse than none - true for a message, wrong for a treaty. The pact
+    appeared in the relations bar with nothing in the thread to account for it,
+    and reading the console you would conclude the engine had signed something
+    nobody agreed to.
+
+    A `send_message` with no words is still dropped, because there the words
+    *are* the act.
+    """
+    from arena_replay.bundle import _messages
+
+    from arena_engine.actions import Action, Propose, RespondToProposal, pass_turn
+    from arena_engine.types import ProposalType, Terms
+
+    state, _ = new_match("t", 4, ROSTER, MatchConfig(turn_limit=45))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p1"] = Action(
+        diplomacy=[Propose(action="propose", to="p2", type=ProposalType.PEACE, terms=Terms())]
+    )
+    state, events = step(state, actions)
+    said = _messages(state, events)
+    assert [m["kind"] for m in said] == ["proposal"]
+    assert said[0]["text"] == "", "no note written, and none invented"
+
+    pid = next(iter(state.proposals))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p2"] = Action(
+        diplomacy=[
+            RespondToProposal(action="respond_to_proposal", proposal_id=pid, response="accept")
+        ]
+    )
+    state, events = step(state, actions)
+    reply = [m for m in _messages(state, events) if m["kind"] == "reply"]
+    assert len(reply) == 1, "a treaty signed in silence is still a treaty signed"
+    assert reply[0]["response"] == "accept"
+    assert reply[0]["text"] == ""
+    assert any(e.type == "treaty_signed" for e in events)
+
+
+def test_an_unchanged_dossier_is_not_repeated(bundle) -> None:
+    """Four dossiers at ~2000 tokens each, repeated on 300 frames, would dominate
+    the bundle - and most turns an agent changes one line or none."""
+    root, _ = bundle
+    turns = sorted(int(f.stem) for f in (root / "turns").glob("*.json"))
+    # Heuristic bots never write one at all, so after the first frame there is
+    # nothing to repeat. A frame that re-sent an identical dossier would fail.
+    seen: dict[str, dict] = {}
+    for turn in turns:
+        for pid, doc in (frame(root, turn).get("dossiers") or {}).items():
+            assert seen.get(pid) != doc, f"turn {turn} repeated {pid}'s unchanged dossier"
+            seen[pid] = doc
+
+
+# ---------------------------------------------------------------------------
+# The match library
+# ---------------------------------------------------------------------------
+
+
+def _library():
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import build_library
+
+    return build_library
+
+
+def test_the_library_indexes_finished_matches(tmp_path: Path) -> None:
+    """One entry per bundle, derived from the bundle and nothing else.
+
+    Derived rather than registered, because a registry drifts: move a directory
+    and it lists matches that are not there while omitting ones that are. This
+    can be deleted and rebuilt at any time, which is the property that makes it
+    safe to regenerate on every `make library`.
+    """
+    lib = _library()
+    for name, turns in (("alpha", 3), ("beta", 5)):
+        state, _ = new_match("t", 4, ROSTER, MatchConfig(turn_limit=turns))
+        writer = BundleWriter.start(
+            tmp_path / name / "bundle", state, {p: f"model-{p}" for p, _ in ROSTER}
+        )
+        for _ in range(turns):
+            state, events = step(state, bots.all_bot_actions(state))
+            writer.add(state, events)
+        writer.finish(state, {}, finished_at="2026-08-17T09:00:00+00:00", spent_usd=1.5)
+
+    entries = [lib.entry(tmp_path, tmp_path / n / "bundle") for n in ("alpha", "beta")]
+    assert [e["id"] for e in entries] == ["alpha", "beta"]
+    for e in entries:
+        # Relative, because the viewer loads it as `?match=<path>` from the page
+        # it was served on; an absolute path works locally and nowhere else.
+        assert not Path(e["path"]).is_absolute()
+        assert e["path"].endswith("bundle")
+        assert e["finished_at"] == "2026-08-17T09:00:00+00:00"
+        assert e["spent_usd"] == 1.5
+        assert e["models"] == [f"model-{p}" for p, _ in ROSTER]
+
+
+def test_an_undated_match_is_marked_as_inferred(tmp_path: Path) -> None:
+    """A rebuilt bundle must not claim to have been played today.
+
+    The two matches that predate timestamps have no `finished_at`, so the date
+    falls back to the file's mtime - which is when the bundle was last *written*,
+    not when it was played. The trailing marker is what lets the viewer say "from
+    file" instead of presenting a guess as a fact.
+    """
+    lib = _library()
+    state, _ = new_match("t", 4, ROSTER, MatchConfig(turn_limit=2))
+    writer = BundleWriter.start(tmp_path / "old" / "bundle", state)
+    for _ in range(2):
+        state, events = step(state, bots.all_bot_actions(state))
+        writer.add(state, events)
+    writer.finish(state, {})
+
+    entry = lib.entry(tmp_path, tmp_path / "old" / "bundle")
+    assert entry["finished_at"].endswith("~"), "an inferred date must be marked as one"
+
+    # And a recorded one is never marked, or the marker would mean nothing.
+    writer.finish(state, {}, finished_at="2026-08-17T09:00:00+00:00")
+    assert not lib.entry(tmp_path, tmp_path / "old" / "bundle")["finished_at"].endswith("~")
+
+
+def test_a_directory_with_no_bundle_is_skipped_not_an_error(tmp_path: Path) -> None:
+    """Runs get killed. A half-written directory should not break the shelf."""
+    lib = _library()
+    (tmp_path / "crashed" / "bundle").mkdir(parents=True)
+    assert lib.entry(tmp_path, tmp_path / "crashed" / "bundle") is None

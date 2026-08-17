@@ -1440,3 +1440,135 @@ export function buildSettlements(cities, locate, colourOf) {
   }
   return group;
 }
+
+/**
+ * A standing banner in each empire's territory naming who it is bound to.
+ *
+ * The treaty system was the hardest thing in this project to see. It was
+ * invisible in the bundle for a while, then invisible in the panel, and even
+ * once both were fixed it lived in a line of text in a collapsed section while
+ * the board - the thing anyone actually looks at - showed four civs expanding
+ * past each other with no indication that two of them had agreed not to fight.
+ *
+ * So it goes on the map. A pole in the civ's own colour, a banner reading PACT
+ * or ALLIANCE, and a row of dots naming the partners in *their* colours, which
+ * is the same encoding the panels and the board already use.
+ *
+ * A `Sprite` rather than a plane, because the camera orbits and a flat banner
+ * spends half of every orbit edge-on and unreadable. Sprites always face the
+ * viewer, which is exactly the property a label wants and exactly the property
+ * a flag does not - so this reads as a standard rather than as cloth, and that
+ * is the right trade for something whose whole job is to be legible.
+ */
+export function buildPacts(tiles, owners, bonds, locate, colourOf) {
+  const group = new THREE.Group();
+  if (!bonds.size) return group;
+
+  // The banner is planted at the *medoid* of the claim, not the mean. A mean
+  // lands outside its own territory whenever an empire is concave - which is
+  // the normal shape for a civ that has grown around a mountain - and a pact
+  // marker floating in a neighbour's land says the opposite of what it means.
+  const home = new Map();
+  tiles.forEach((key, i) => {
+    if (!owners[i] || !bonds.has(owners[i])) return;
+    if (!home.has(owners[i])) home.set(owners[i], []);
+    home.get(owners[i]).push(i);
+  });
+
+  for (const [who, claim] of home) {
+    const spots = claim.map((i) => locate(i));
+    const cx = spots.reduce((a, p) => a + p[0], 0) / spots.length;
+    const cz = spots.reduce((a, p) => a + p[2], 0) / spots.length;
+    let best = spots[0];
+    let bestD = Infinity;
+    for (const p of spots) {
+      const d = (p[0] - cx) ** 2 + (p[2] - cz) ** 2;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+
+    const [x, y, z] = best;
+    const partners = bonds.get(who);
+    const POLE = 1.5;
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.045, POLE, 5),
+      new THREE.MeshLambertMaterial({ color: colourOf(who), flatShading: true })
+    );
+    pole.position.set(x, y + POLE / 2, z);
+    group.add(pole);
+
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: banner(partners, colourOf),
+      // Drawn over whatever it stands on. A banner half-sunk into a hill it is
+      // planted on top of looks like a bug, and it is one tile of occlusion
+      // against the one label on the board that summarises the diplomacy.
+      depthTest: false,
+      transparent: true,
+    }));
+    // Sized against the hex grid, not against the texture. At 1.9 wide - about
+    // two tiles - the banner was geometrically correct and 20 pixels across at
+    // the default framing, which is to say invisible. A label has to be read at
+    // the zoom people actually use, so it is deliberately out of scale with the
+    // world: five tiles wide, floating clear of the pole.
+    sprite.scale.set(4.6, 1.73, 1);
+    sprite.position.set(x, y + POLE + 0.86, z);
+    sprite.renderOrder = 10;
+    group.add(sprite);
+  }
+  return group;
+}
+
+const banners = new Map();
+
+/** The banner face: a word and a dot per partner, drawn once per combination. */
+function banner(partners, colourOf) {
+  const key = partners.map((p) => `${p.who}:${p.kind}`).sort().join("|");
+  if (banners.has(key)) return banners.get(key);
+
+  const W = 256;
+  const H = 96;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const g = c.getContext("2d");
+
+  const allied = partners.some((p) => p.kind === "alliance");
+  g.fillStyle = "rgba(13,17,23,0.92)";
+  g.strokeStyle = allied ? "#4ade80" : "#cbd5e1";
+  g.lineWidth = 4;
+  round(g, 3, 3, W - 6, H - 6, 12);
+  g.fill();
+  g.stroke();
+
+  g.fillStyle = allied ? "#4ade80" : "#e6edf3";
+  g.font = "bold 34px ui-sans-serif, system-ui, sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(allied ? "ALLIANCE" : "PACT", W / 2, 32);
+
+  // One dot per partner, in that partner's colour - the same key the board,
+  // the panels and the diplomacy threads all use, so no legend is needed.
+  const R = 9;
+  const gap = 26;
+  const startX = W / 2 - ((partners.length - 1) * gap) / 2;
+  partners.forEach((p, n) => {
+    g.beginPath();
+    g.arc(startX + n * gap, 68, R, 0, Math.PI * 2);
+    g.fillStyle = `#${colourOf(p.who).toString(16).padStart(6, "0")}`;
+    g.fill();
+  });
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  banners.set(key, tex);
+  return tex;
+}
+
+function round(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}

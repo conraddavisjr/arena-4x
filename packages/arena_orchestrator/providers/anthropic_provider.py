@@ -35,6 +35,7 @@ import time
 from typing import Any
 
 from .base import (
+    THINKING_BUDGET,
     FatalProviderError,
     Malformed,
     Overloaded,
@@ -44,6 +45,7 @@ from .base import (
     Timeout,
     Turn,
     Usage,
+    unstalled,
 )
 
 # Above this, non-streaming requests hit the SDK's HTTP timeout. The action
@@ -80,12 +82,17 @@ class AnthropicClient:
         # Above STREAM_ABOVE_MAX_TOKENS the adapter switches to streaming, which
         # is why that ceiling exists.
         max_tokens: int = 32_000,
-        effort: str = "high",
+        effort: str = "medium",
         thinking_display: str | None = "summarized",
-        # Just under the orchestrator's per-turn deadline. If the HTTP client
-        # gave up first the turn would be recorded as a transport timeout rather
-        # than as the model taking too long, which are different diagnoses.
+        # The transport backstop. A stalled stream is now caught by `stall_gap_s`
+        # in a fraction of this, so this only fires on something the stream layer
+        # cannot see - a connection that never opens at all.
         timeout: float = 400.0,
+        # How long the stream may say nothing before it is treated as dead. Well
+        # above the gap between tokens on any of these models and well below any
+        # plausible total, which is the property that lets it tell a model
+        # thinking from a socket that has stopped talking.
+        stall_gap_s: float = 90.0,
     ):
         import anthropic
 
@@ -95,6 +102,7 @@ class AnthropicClient:
         self._max_tokens = max_tokens
         self._effort = effort
         self._thinking_display = thinking_display
+        self._stall_gap_s = stall_gap_s
 
     @property
     def _supports_adaptive(self) -> bool:
@@ -122,18 +130,39 @@ class AnthropicClient:
             # `output_format` is deprecated API-wide.
             "output_config": output_config,
         }
-        # `effort` travels with adaptive thinking; both are 4.6-and-later.
+        # Two dials, one intent. 4.6-and-later take adaptive thinking plus an
+        # effort enum; everything before it takes an explicit token budget.
+        #
+        # The `else` is the point. It used to not exist, so a pre-4.6 model was
+        # sent no thinking instruction at all - which on the shakeout roster
+        # meant `claude-haiku-4-5` played every match of this project with
+        # reasoning off while the seat beside it was set to `high`. It produced
+        # no trace either, and the absence read as "this vendor gives none"
+        # rather than "we never asked".
+        thinking: dict[str, Any] = {}
         if self._supports_adaptive:
-            thinking: dict[str, Any] = {"type": "adaptive"}
-            if self._thinking_display:
-                thinking["display"] = self._thinking_display
-            request["thinking"] = thinking
+            thinking = {"type": "adaptive"}
             output_config["effort"] = self._effort
+        else:
+            thinking = {"type": "enabled", "budget_tokens": THINKING_BUDGET[self._effort]}
+        if self._thinking_display:
+            thinking["display"] = self._thinking_display
+        request["thinking"] = thinking
 
         started = time.monotonic()
         try:
             if self._max_tokens > STREAM_ABOVE_MAX_TOKENS:
                 async with self._client.messages.stream(**request) as stream:
+                    # Drained through the stall guard rather than awaited whole.
+                    # `get_final_message()` on its own is a single await that
+                    # cannot tell "still arriving" from "stopped arriving", and
+                    # a stream that dies mid-message then costs the entire turn
+                    # deadline with nothing to show for it. Consuming the events
+                    # first gives the guard something to measure; the accumulated
+                    # message is still assembled by the SDK, so usage, refusals
+                    # and stop reasons are read exactly as before.
+                    async for _ in unstalled(stream, gap_s=self._stall_gap_s, provider=self.name):
+                        pass
                     message = await stream.get_final_message()
             else:
                 message = await self._client.messages.create(**request)

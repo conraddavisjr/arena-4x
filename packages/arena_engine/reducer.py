@@ -32,7 +32,7 @@ from arena_engine.content import (
     available_techs,
 )
 from arena_engine.events import Event
-from arena_engine.types import City, MatchConfig, Player, State, Unit
+from arena_engine.types import City, Dossier, MatchConfig, Player, State, Unit
 
 CITY_NAMES = [
     "Ravenholt",
@@ -439,21 +439,69 @@ def _log_reasoning(s: State, player_id: str, action: Action, out: list[Event]) -
     )
 
 
+# Roughly 2000 tokens, the figure the design specifies, at four characters a
+# token. The dossier is re-sent verbatim on every one of ~300 turns, so it is
+# paid for about three hundred times over - an unbounded one is the single
+# easiest way for an agent to quietly triple its own input bill.
+DOSSIER_CHAR_CAP = 8_000
+
+
+def _fit_dossier(dossier: Dossier) -> tuple[Dossier, bool]:
+    """Bring a dossier under the size cap, cheapest content first.
+
+    The previous version capped the *number* of lessons and commitments at
+    twelve, which is not a size cap at all: a model writing twelve long ones
+    sailed past it. Measured on the first live match, one agent's dossier
+    reached 10,536 characters - around 2,600 tokens, well over the design
+    figure - while passing the count check on every turn.
+
+    The order is deliberate. `doctrine` and `opponent_models` are never trimmed:
+    the doctrine is the plan the agent is executing, and the opponent models are
+    the assessments this lab exists to read. Lessons go first because they are
+    history, then commitments. An agent that has written so much doctrine and so
+    many assessments that those alone exceed the cap keeps them and gets the
+    event - mangling an assessment to save tokens would destroy the record to
+    protect the bill.
+    """
+
+    def size(d: Dossier) -> int:
+        return len(d.model_dump_json())
+
+    if size(dossier) <= DOSSIER_CHAR_CAP:
+        return dossier, False
+
+    lessons = list(dossier.lessons)
+    commitments = list(dossier.standing_commitments)
+    while (
+        lessons
+        and size(
+            dossier.model_copy(update={"lessons": lessons, "standing_commitments": commitments})
+        )
+        > DOSSIER_CHAR_CAP
+    ):
+        lessons.pop()
+    while (
+        commitments
+        and size(
+            dossier.model_copy(update={"lessons": lessons, "standing_commitments": commitments})
+        )
+        > DOSSIER_CHAR_CAP
+    ):
+        commitments.pop()
+    return (
+        dossier.model_copy(update={"lessons": lessons, "standing_commitments": commitments}),
+        True,
+    )
+
+
 def _store_dossier(s: State, player_id: str, action: Action, out: list[Event]) -> None:
     """Persist the agent's self-authored memory verbatim.
 
     The engine never edits the content. It only truncates an over-long one, and
     it says so in the log rather than silently dropping the tail.
     """
-    dossier = action.dossier
-    limit = 12
-    if len(dossier.lessons) > limit or len(dossier.standing_commitments) > limit:
-        dossier = dossier.model_copy(
-            update={
-                "lessons": dossier.lessons[:limit],
-                "standing_commitments": dossier.standing_commitments[:limit],
-            }
-        )
+    dossier, trimmed = _fit_dossier(action.dossier)
+    if trimmed:
         out.append(
             ev.event(
                 s.turn,
@@ -507,6 +555,14 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                         proposal_id=p.id,
                         to=item.to,
                         type=item.type.value,
+                        # The covering note, carried so the replay can show it.
+                        # Without this the negotiation is invisible: models put
+                        # most of their diplomacy in a proposal's `message`
+                        # rather than in a separate `send_message`, and the
+                        # bundle only ever gathered `message_sent`. A match
+                        # whose four civs signed pacts every few turns rendered
+                        # as "Nobody has spoken."
+                        text=item.message or "",
                     )
                 )
             case "respond_to_proposal":
@@ -527,6 +583,30 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                 )
                 for e in results:
                     out.append(ev.event(s.turn, e.kind, e.detail, actor=e.actor, other=e.other))
+                # Emitted after the outcome, with or without prose. The reply is
+                # the other half of the exchange - "accepted, let us keep the
+                # western frontier quiet" is the answer to a greeting, and a
+                # thread showing one without the other is not a conversation.
+                #
+                # `message` is optional and models do sometimes leave it null:
+                # one signed a ten-turn pact saying nothing at all. Emitting only
+                # when words were written made that treaty *invisible* - a pact
+                # appeared in the relations bar with nothing in the thread to
+                # explain it. Here the act is the content, so the event fires
+                # either way and the viewer renders the silence as silence.
+                out.append(
+                    ev.event(
+                        s.turn,
+                        ev.PROPOSAL_ANSWERED,
+                        f"{s.players[player_id].civ_name} answered "
+                        f"{s.players[proposal.from_player].civ_name}",
+                        actor=player_id,
+                        proposal_id=proposal.id,
+                        to=proposal.from_player,
+                        response=item.response,
+                        text=item.message or "",
+                    )
+                )
             case "declare_war":
                 if item.on not in s.players or item.on == player_id or s.is_neutral(item.on):
                     _reject(s, out, player_id, "declare_war", f"cannot declare war on {item.on!r}")
@@ -761,8 +841,18 @@ def _attack(s: State, player_id: str, order, out: list[Event]) -> None:  # noqa:
             actor=player_id,
             attacker=attacker.id,
             defender=defender.id,
+            # Who was on the receiving end, and what both sides were. `actor` is
+            # the attacker, so without these a spectator can see that a fight
+            # happened and not who it was with - which is most of what makes a
+            # fight worth reporting. It also lets losses to the wilderness be
+            # told apart from losses to a rival without parsing the text.
+            defender_owner=defender.owner,
+            attacker_type=attacker.type.value,
+            defender_type=defender.type.value,
             attacker_damage=result.attacker_damage,
             defender_damage=result.defender_damage,
+            attacker_died=result.attacker_died,
+            defender_died=result.defender_died,
         )
     )
 

@@ -115,6 +115,32 @@ the schema parity test passed, and a 108-turn dry match played through without
 complaint. **None of those ever send the schema to a vendor.** It would have
 400'd on turn one of the flagship run, on three of four seats at once.
 
+### A `$ref` may not carry a `description`
+
+Adding descriptions to the eight dossier fields - the fix for two models never
+writing an opponent model - broke OpenAI on turn one of the next run:
+
+```
+$ref cannot have keywords {'description'}
+```
+
+`trustworthiness` is an enum, so Pydantic renders it as a `$ref` to a `$defs`
+entry, and a `Field(description=...)` becomes a sibling of that `$ref`. In
+draft-07 a `$ref` *replaces* its whole node, so a sibling is ambiguous by
+construction and OpenAI rejects it rather than ignoring it. Only that one field
+of the eight was affected, which is why nothing looked wrong on inspection.
+
+The sanitizer drops the siblings now. The description is not hoisted into an
+`allOf`, which is the other legal fix, because that costs bytes Anthropic's
+grammar cap does not have - and the same guidance already reaches every model
+through the rules reference, in the cached prefix, at a tenth the price.
+
+**The gap this exposes is the interesting part.** The schema was valid to us,
+the parity test passed, `make contracts` passed, and the failure still arrived
+on a paid live turn. The dialect test asserted about keywords we *strip*; it
+had nothing to say about a keyword that is legal everywhere except beside a
+`$ref`. It does now.
+
 ### Anthropic enforces two undocumented schema limits
 
 Found by bisecting against the live API:
@@ -176,6 +202,37 @@ Even so it cannot discriminate the two placements through the streaming path -
 three attempts failed - so placement is guarded by an offline assertion on the
 request shape and by a runtime `cache_miss` journal record instead.
 
+### One seat counted its cached tokens twice
+
+`Usage.input_tokens` is defined as the *uncached* input, because the pricer
+charges `input * 1.0 + cache_read * 0.1` and folding them together would hide
+the one number worth watching. Three adapters honoured that. The OpenAI
+Responses adapter passed `usage.input_tokens` through unchanged, and on that
+surface it is a total that already includes the cached portion.
+
+So every cached token on that seat was billed at **1.1x instead of 0.1x** -
+eleven times over on the cached share. Measured on a 19-turn shakeout: 65,280
+of 133,185 input tokens were cached, and the seat was overcharged $0.016 of
+$0.62. Small, because that model's cost is dominated by 292k output tokens.
+On a flagship roster with a larger prefix and less output it scales the wrong
+way.
+
+The louder symptom was the cache-rate column, where **four seats were not
+measuring the same quantity** - one reporting cached/total, three reporting
+cached/uncached. That column is the tripwire for the 12.5x breakpoint bug
+above, so it being quietly incomparable across vendors mattered more than the
+cent and a half.
+
+Two things had already stated the rule and neither enforced it: the `Usage`
+docstring, and a comment in the sibling function forty lines below the bug
+saying exactly why the subtraction is necessary. **A comment is not a test.**
+There is a test now, and it asserts all four surfaces at once.
+
+While fixing it: the viewer's cache column divided by *all* tokens including
+output, so a seat reading half its prefix from cache displayed 13% purely
+because it thought at length. Output tokens were never cacheable; the
+denominator is input.
+
 ### Resume reset the budget meter
 
 The cap belongs to the match, not to the process running it. A run that crashed
@@ -215,19 +272,144 @@ having them.
 
 ---
 
+## The diplomacy console was lying, not empty
+
+The viewer said "Nobody has spoken" for a match in which all four civs
+negotiated non-aggression pacts, renewed them, and honoured them to the end.
+
+The bundle gathered `message_sent` events and nothing else. But a model that
+wants a pact does not send a message and then propose - it proposes, and puts
+the diplomacy in the proposal's covering note. Of twenty utterances in a
+19-turn match, **seven were invisible**, and they were the load-bearing ones:
+both pact openings and every single acceptance. The replies were worse than
+invisible - the engine never stored them at all, so `respond_to_proposal`'s
+`message` was parsed, validated, and dropped on the floor.
+
+This is a different failure from an empty panel. An empty panel says "I have
+nothing"; this one asserted something false about the match, and did it in the
+one place a reader would go to check.
+
+A frame now tags each utterance `message`, `proposal` or `reply`, and the
+viewer labels the three differently, because they are three different acts:
+talk, talk with binding terms attached, and the answer that signs them or does
+not.
+
+### A model can sign a treaty without saying anything
+
+`respond_to_proposal.message` is optional, and one model used that: haiku
+accepted a ten-turn non-aggression pact with `message: null`. Every other
+acceptance in two matches came with prose, so the silent one looked like a
+missing feature - a pact appeared in the relations bar with nothing in the
+thread to account for it.
+
+It was not a missing feature and not an engine bug. It was a modelling mistake
+of mine: wordless replies were suppressed on the reasoning that an empty chat
+bubble is worse than none. True for a message, wrong for a treaty. In a
+negotiation the *act* is the content, and a civ that bound itself for ten turns
+without comment has done something worth seeing - arguably more interesting
+than the ones that explain themselves. The viewer says "signed without comment"
+now, and the reply's own reasoning that turn ("Accept p4 non-aggression pact to
+secure western border") is right there beside it.
+
+The general rule this produced: a `send_message` needs words because there the
+words are the act; a proposal or a reply does not.
+
+Two adjacent facts, both of which look like bugs and are not:
+
+- **Every message in the match was private. There were no public broadcasts at
+  all.** Not a rendering gap - the models simply never used the public channel.
+- **There was no combat in nineteen turns.** Four civs, mutual pacts, and not
+  one fight, so the combat panel is empty because the match was.
+
+---
+
+## Every match bought its models' reasoning and threw it away
+
+Reasoning tokens are billed as output. They were counted, priced, and paid for
+on every turn of every match - and the trace behind them was parsed out of the
+response by the adapter and then dropped, because nothing downstream stored it.
+The Anthropic adapter's own docstring said the text "matters more here than in
+most applications, because reading the model's reasoning is the entire
+experiment", four lines above the code that discarded it.
+
+Traces now go to `transcripts.jsonl`, and their size to the journal so coverage
+is auditable without opening eighty payloads. Not into the published bundle, for
+the same reason the prompts are not: a published match should carry the match
+and nothing else.
+
+**What each vendor will actually give you**, measured live rather than assumed:
+
+| Vendor | Trace | Notes |
+|---|---|---|
+| Anthropic | 367 chars on `claude-opus-5` | Needs `thinking.display`. **Nothing on `claude-haiku-4-5`** - adaptive thinking is 4.6-and-later, so the shakeout roster has no trace at all |
+| OpenAI | 1,948 chars | Needs `reasoning.summary` **requested**. Without it the reasoning items arrive with an empty summary list and 774 reasoning tokens are billed for nothing retained |
+| xAI | 132 chars | `reasoning_content` on the message - a vendor extension to a shared schema, absent from the SDK's typed model, so read by name |
+| Google | **none** | Billed 1,137 thought tokens and exposes no thought text on the interactions surface |
+
+So an absent trace means "this vendor did not offer one", never "the model did
+not think". Two of four seats on the shakeout roster produce nothing, and one of
+those still charges for it.
+
+Worth keeping distinct from the `reasoning` block the action schema requires.
+That block is the account a model writes *knowing it will be read and handed
+back*; the trace is the deliberation behind it. They are different evidence, and
+the interesting comparison is between them.
+
+---
+
+## Viewer bugs, which fail the same way
+
+Both of these drew nothing and said nothing. A panel that throws leaves a
+stack trace; a panel that is never reached leaves an empty box that reads as
+"no data this turn", which is a plausible answer in a game viewer and so does
+not prompt anyone to look.
+
+- **A `return` in a nested branch returned from the whole render.** The
+  dossier's "all civs" view ended in a bare `return`, written to mean "done
+  with the dossier" and actually meaning "done with `panels()`". Everything
+  after it - Events, Signals, every count badge - stopped rendering. "All" is
+  the *default* view, so this was the normal case, not an edge one. Found by
+  staging the viewer against a free bot match before pointing it at a paid
+  bundle, which is now the habit.
+- **A block placed above the values it read** threw a temporal-dead-zone error
+  on every render, and the page absorbed it by not drawing the sections below.
+
+The rule both suggest: a `return` is only trustworthy in a function that does
+one thing. Both blocks are their own functions now.
+
+---
+
 ## Costs
 
-Measured, not estimated. Shakeout roster, 30 turns, four live vendors.
+Measured, not estimated. Shakeout roster, seed 4, a complete 20-turn match on
+the corrected accounting - the first run where all four cache figures are the
+same quantity (cached over total input).
 
-| Seat | Model | $/turn | Median latency | Cache read |
-|---|---|---|---|---|
-| p1 | `claude-haiku-4-5` | $0.0127 | 19s | 52% |
-| p2 | `gpt-5.4-mini` | $0.0269 | 82s | 28% |
-| p3 | `gemini-3.6-flash` | $0.0030 | 25s | 0% |
-| p4 | `grok-4.3` | $0.0012 | 6s | 14% |
+| Seat | Model | $/turn | Median latency | Cache read | Output tokens | Score |
+|---|---|---|---|---|---|---|
+| p1 | `claude-haiku-4-5` | $0.0142 | 23s | 50% | 36k | 48 |
+| p2 | `gpt-5.4-mini` | $0.0388 | 120s | 58% | 379k | 94 |
+| p3 | `gemini-3.6-flash` | $0.0044 | 35s | 0% | 20k | **101** |
+| p4 | `grok-4.3` | $0.0014 | 9s | 22% | 10k | 71 |
 
-**$0.044 per turn for the whole table.** 300 turns extrapolates to ~$13 on this
+**$0.059 per turn for the whole table.** 300 turns extrapolates to ~$18 on this
 roster. Flagship models are several times that and still sit inside the $75 cap.
+
+The result that makes the case for measuring cost per point at all: **the seat
+that won spent a twentieth of what the second-place seat spent.** Gemini took
+101 at $0.087 while gpt-5.4-mini took 94 at $0.777, having produced *nineteen
+times* as many output tokens. Cheapest per point was grok at 46 points per
+100k tokens against gpt's 18.
+
+One match on one seed proves nothing about model quality, and the caveat below
+about lost turns matters before anyone reads a ranking into it. But it is
+exactly the shape of finding a leaderboard by score alone would hide.
+
+**One seat is 65% of the bill and ten times the latency of another.**
+`gpt-5.4-mini` produced 293k output tokens against grok's 11k - twenty-six
+times as many - for a middling score. Turns resolve simultaneously, so it also
+sets the wall clock for everyone. Whether that thinking buys anything is the
+question this lab exists to answer, and it is now measurable per seat.
 
 Two things that matter more than the totals:
 
@@ -244,6 +426,125 @@ turns on one seat at 107s median and ~15,500 output tokens a call. That is a
 model thinking, not a hung request, and cutting it off manufactured exactly the
 vendor bias the limit exists to avoid.
 
+### A timeout costs two turns, not one, and cannot be retried
+
+Two complete 20-turn matches lost agent-turns to the 420s deadline. The second
+run is the alarming one: **p1 timed out on turns 13 and 14 back to back**, then
+missed the cache on 15, 19 and 20. Its score came in last at 48, against 71 for
+the same model in the first match.
+
+That is the failure this limit exists to prevent, arriving through the limit
+itself. **p1's median latency is 23 seconds.** A 420s timeout on that seat is
+not a model thinking, it is a stalled request - and the seat is being scored
+down for a transport problem rather than for how it played, which is precisely
+the vendor bias the whole design is trying to avoid.
+
+Two structural problems behind it:
+
+- **The retry has nowhere to run.** Each SDK client is given a 400s timeout,
+  deliberately just under the 420s turn deadline so a hang is classified as a
+  transport timeout rather than an opaque turn failure. But that leaves 20
+  seconds, which is not enough to place a second call. The classification works
+  and the recovery it was meant to enable does not - no `provider_retry` was
+  journalled for either lost turn.
+- **The next turn pays too.** A 420s timeout is seven minutes, and Anthropic's
+  cache TTL is five. So the turn after a timeout necessarily finds a cold
+  prefix and writes a fresh entry at 1.25x instead of reading at 0.1x. The
+  journal shows exactly that: `agent_failure` on turn 7, `cache_miss` on turn 8.
+
+The fix was not a smaller SDK timeout. 200s would leave room for a real retry,
+and would also cut off a seat whose median is 120s and whose calls run to
+~19,000 output tokens - manufacturing the vendor bias the 420s exists to
+prevent. Every value was wrong for one case or the other, because the two limits
+were answering different questions through one number.
+
+**Fixed by measuring silence instead of duration.** A model streaming tokens is
+alive however long it takes; a stream that has produced nothing for ninety
+seconds is not going to speak again. So `stall_gap_s` resets on every event: a
+five-minute thinker costs nothing, and a dead socket is caught in ninety
+seconds, which finally leaves room inside the turn for the retry a hang needs.
+
+- `stall_gap_s` (90s) catches hangs. Raises `Stalled`, a subclass of `Timeout`,
+  so the existing retry ladder picks it up without knowing it exists while the
+  journal can still tell a hang from a model that thought too long.
+- `turn_timeout_s` rose 420s -> 600s and became what it should always have been:
+  a backstop wide enough for one full attempt plus one retry.
+- The guard wraps the iterator rather than rebuilding streaming around it, so
+  each adapter's usage, refusal and stop-reason handling is untouched - the parts
+  most likely to break.
+
+**Two seats, not four.** Anthropic already streamed; OpenAI now does, for the
+guard rather than for the tokens. xAI's chat-completions surface could and does
+not yet. Google's interactions surface exposes no token stream at all, so that
+seat still relies on the transport timeout and the backstop. Recorded here
+rather than papered over: the policy is not yet uniform across the table, and a
+four-way comparison with two different hang policies is a smaller bias than the
+one it replaced, not zero.
+
+All ten live contract tests pass on the streaming path, which matters more than
+usual here - this is precisely the class of change that passes offline and fails
+on the wire.
+
+Same reason a resume always pays a cache write on its first turn: any gap longer
+than five minutes is a cold prefix. Worth knowing before reading a resumed run's
+cache column and concluding something broke.
+
+---
+
+## Two things investigated and one of them deliberately not fixed
+
+### The dossier cap did not cap what it claimed to
+
+The design says "capped at roughly 2000 tokens". The implementation capped the
+*number* of lessons and commitments at twelve, which is not a size cap: a model
+writing twelve long ones sails past it. Measured on the first live match, one
+agent's dossier reached 10,536 characters - about 2,600 tokens - while passing
+the count check on every turn. The dossier is re-sent verbatim on every turn, so
+an unbounded one is the easiest way for an agent to quietly triple its own input
+bill.
+
+It is a size budget now, trimmed cheapest-content-first: lessons, then
+commitments. **Doctrine and opponent models are never trimmed** - the doctrine is
+the plan being executed and the opponent models are the record this lab exists to
+read. Mangling an assessment to save tokens would destroy the evidence to protect
+the bill.
+
+Separately: two of the four models wrote **no opponent models at all**, and the
+field carried no description, so its name was the only guidance. All eight
+dossier fields now have descriptions, and the rules reference explains the
+dossier directly.
+
+That created its own problem. Descriptions cost 1,400 bytes of schema, which
+pushed the Anthropic dialect over its ~6KB grammar cap. So the dialect strips
+them - before flattening, not after, because the flattening writes a description
+of its own that is load-bearing - while the other three vendors keep them, and
+the same guidance reaches everyone through the cached rules reference.
+
+### Gemini's zero cache rate is real, expected, and not worth fixing
+
+Implicit caching does not engage below roughly **17k tokens**. Measured: at a
+2.2k-token prefix and a 7.3k-token prefix, zero cached on every call; at 17k, it
+cached 8,174 tokens from the second call onward. Our system prefix is 2,234
+tokens, so it does not qualify.
+
+The Interactions API has no `cached_content` parameter either - only
+`previous_interaction_id`, which chains the whole prior conversation forward and
+is precisely the growing-context design this project rejected.
+
+The arithmetic settles it:
+
+| | per match (300 turns) |
+|---|---|
+| Gemini prefix uncached | $0.20 |
+| If it cached | $0.02 |
+| **Saving available** | **$0.18** |
+| Cost of padding the prefix to qualify | $0.84 |
+
+Padding to reach the threshold costs four times more than not caching at all.
+The amber flag in the cost meter stays, because a zero on a vendor with an
+explicit breakpoint means the 12.5x bug above - but it now carries a tooltip
+saying which case is which.
+
 ---
 
 ## What to check first, next time
@@ -255,3 +556,6 @@ vendor bias the limit exists to avoid.
    concluding the model is weak. That mistake cost two days.
 4. If a vendor error names something that sounds like a credential or a billing
    problem, verify the model id first.
+5. Stage the viewer against a bot match before a paid one. It costs nothing and
+   it is the only way to tell "this match had no diplomacy" from "this panel
+   never rendered".
