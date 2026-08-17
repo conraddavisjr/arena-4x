@@ -97,12 +97,22 @@ def main() -> None:
     ended = next(
         (r for r in jl.Journal(root=args.run).records() if r["type"] == jl.MATCH_ENDED), None
     )
+    created = next(
+        (r for r in jl.Journal(root=args.run).records() if r["type"] == jl.MATCH_CREATED), None
+    )
     root = writer.finish(
         state,
         {
             "winner": ended.get("winner") if ended else None,
             "reason": ended.get("reason") if ended else "incomplete",
         },
+        # Carried from the journal rather than stamped now. A rebuild is not a
+        # new match, and dating it today would quietly relabel a run from last
+        # week - which is precisely the kind of small lie a library of matches
+        # cannot afford, because nothing downstream could ever catch it.
+        finished_at=(ended or {}).get("finished_at"),
+        started_at=(created or {}).get("started_at"),
+        spent_usd=(ended or {}).get("spent_usd"),
     )
     print(f"{root}")
     print(f"  turns   {state.turn}")

@@ -35,7 +35,43 @@
 
   header{position:absolute;top:0;left:0;right:0;z-index:2;display:flex;gap:10px;align-items:center;
     padding:10px 14px;background:linear-gradient(#0b0f14ee,#0b0f1400);flex-wrap:wrap}
+  /* `hidden` loses to any element with an explicit `display`, and several here
+     have one - so hiding the scrubber by attribute silently did nothing. */
+  [hidden]{display:none !important}
   h1{font-size:13px;margin:0;font-weight:600;letter-spacing:.04em}
+  /* Reads as the title, behaves as a button. */
+  .brand{background:none;border:0;padding:0;font-size:13px;font-weight:600;
+    letter-spacing:.04em;color:var(--ink)}
+  .brand:hover{background:none;color:#cfe0ff}
+
+  /* The match library. A dialog rather than a page, because it is a way back to
+     the shelf rather than a place you stay. */
+  #libWrap{position:fixed;inset:0;z-index:60;background:#040709d9;
+    display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px}
+  #libWrap[hidden]{display:none}
+  #lib{width:100%;max-width:760px;max-height:82vh;display:flex;flex-direction:column;
+    background:#0d1117;border:1px solid #33404f;border-radius:10px;
+    box-shadow:0 24px 70px #000c;overflow:hidden}
+  #lib header{position:static;padding:12px 14px;border-bottom:1px solid var(--line);
+    display:flex;gap:10px;align-items:center;background:none}
+  #lib h2{margin:0;font-size:13px;font-weight:600;letter-spacing:.04em}
+  #libFind{flex:1;background:#161c24;border:1px solid var(--line);border-radius:6px;
+    padding:6px 9px;color:var(--ink);font:inherit;font-size:12px;min-width:0}
+  #libList{overflow-y:auto;padding:6px}
+  .match{display:grid;grid-template-columns:26px 1fr auto;gap:10px;align-items:center;
+    padding:9px 10px;border-radius:7px;border:1px solid transparent;cursor:pointer}
+  .match:hover{background:#151b23;border-color:#2a3441}
+  .match.here{border-color:#2f6feb;background:#111a25}
+  .match .star{background:none;border:0;padding:2px 4px;font-size:15px;line-height:1;
+    color:#3d4652}
+  .match .star.on{color:#fbbf24}
+  .match .title{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
+  .match .who{display:flex;gap:5px;align-items:center;margin-top:3px}
+  .match .sub{color:var(--dim);font-size:11px;margin-top:2px}
+  .match .right{text-align:right;color:var(--dim);font-size:11px;white-space:nowrap}
+  .match .rename{background:none;border:0;color:var(--faint);font-size:11px;padding:0 3px}
+  .match .rename:hover{background:none;color:#cfe0ff}
+  .approx{color:var(--faint)}
   button{background:#1b222c;color:var(--ink);border:1px solid var(--line);padding:5px 10px;
     border-radius:5px;cursor:pointer;font:inherit;font-size:12px}
   button:hover{background:#28313d}
@@ -233,7 +269,11 @@
 <main>
   <div id="stage">
     <header>
-      <h1>ARENA-4X</h1>
+      <!-- The title is the way into the library, which is where a visitor's
+           hand goes anyway. Kept a button so it is reachable by keyboard and
+           announces itself, rather than a heading with a click handler. -->
+      <button id="libBtn" class="brand" aria-haspopup="dialog">ARENA-4X
+        <span class="caret">▾</span></button>
       <!-- One menu for what you are looking at, and Play left outside it,
            because Play is the control you reach for repeatedly while the view
            is something you set and forget. -->
@@ -272,6 +312,16 @@
   <details><summary>Signals<i id="n-signals"></i></summary><div id="signals"></div></details>
 </aside>
 <div id="tip" role="tooltip" aria-hidden="true"></div>
+<div id="libWrap" hidden>
+  <div id="lib" role="dialog" aria-modal="true" aria-label="Match library">
+    <header>
+      <h2>Matches</h2>
+      <input id="libFind" type="search" placeholder="search name, model, outcome" autocomplete="off">
+      <button id="libClose" aria-label="Close">✕</button>
+    </header>
+    <div id="libList"></div>
+  </div>
+</div>
 
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.min.js","three/":"./vendor/"}}
@@ -1206,6 +1256,175 @@ function togglePlay() {
 }
 
 /**
+ * The match library.
+ *
+ * `library.json` carries the facts, derived from each bundle and rebuildable at
+ * any time. Names and stars are *not* in it: a published bundle is a static
+ * directory with no write path, so persisting an annotation would mean either a
+ * server - which this viewer exists in order not to need - or a CLI nobody would
+ * run mid-scrub. They live in `localStorage` instead.
+ *
+ * That trade is worth stating plainly, because it is a real limitation rather
+ * than an implementation detail: a name you type is yours, in this browser, and
+ * does not travel with a match you publish or open elsewhere. For a lab notebook
+ * that is the right answer. For a shared catalogue it would not be, and the fix
+ * then is a real store rather than a bigger `localStorage` key.
+ */
+const NOTES_KEY = "arena4x.notes.v1";
+
+function notes() {
+  try {
+    return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}");
+  } catch {
+    // A corrupt key should cost the annotations, not the viewer.
+    return {};
+  }
+}
+
+function note(id, patch) {
+  const all = notes();
+  all[id] = { ...(all[id] || {}), ...patch };
+  try {
+    localStorage.setItem(NOTES_KEY, JSON.stringify(all));
+  } catch {
+    /* private mode, or full. The list still works, it just forgets. */
+  }
+}
+
+async function loadLibrary() {
+  if (S.library) return S.library;
+  try {
+    const res = await fetch("library.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(String(res.status));
+    S.library = (await res.json()).matches || [];
+  } catch {
+    // Served straight from a single bundle, which is the published case. There
+    // is no shelf to go back to, so the title simply is not a button.
+    S.library = [];
+  }
+  return S.library;
+}
+
+function drawLibrary() {
+  const all = S.library || [];
+  const kept = notes();
+  const find = $("libFind").value.trim().toLowerCase();
+  const label = (m) => kept[m.path]?.name || m.id;
+  const hay = (m) =>
+    [label(m), m.id, ...(m.models || []), m.condition || "", m.winner_name || ""]
+      .join(" ")
+      .toLowerCase();
+
+  const shown = all
+    .filter((m) => !find || hay(m).includes(find))
+    // Starred first, then newest. Sorting starred to the top is the whole point
+    // of starring: a flat list re-sorted by date buries the match you keep
+    // coming back to under every experiment run since.
+    .sort((a, b) => {
+      const star = (kept[b.path]?.star ? 1 : 0) - (kept[a.path]?.star ? 1 : 0);
+      return star || String(b.finished_at).localeCompare(String(a.finished_at));
+    });
+
+  const dot = (name, i) =>
+    `<span class="dot" style="background:${CSS[i % CSS.length]}" title="${esc(name)}"></span>`;
+
+  $("libList").innerHTML =
+    shown
+      .map((m) => {
+        const starred = !!kept[m.path]?.star;
+        const here = m.path === BASE || `${m.path}/` === `${BASE}/`;
+        // A trailing "~" marks a date inferred from the file rather than
+        // recorded by the run. Shown as such instead of silently rounded, so a
+        // rebuilt bundle does not quietly claim to have been played today.
+        const approx = String(m.finished_at).endsWith("~");
+        const when = String(m.finished_at).replace("~", "").replace("T", " ").slice(0, 16);
+        const outcome = m.condition
+          ? `${esc(m.condition)}${m.winner_name ? ` → ${esc(m.winner_name)}` : ""}`
+          : "unfinished";
+        return `<div class="match ${here ? "here" : ""}" data-path="${esc(m.path)}">
+        <button class="star ${starred ? "on" : ""}" data-star="${esc(m.path)}"
+          aria-pressed="${starred}" title="${starred ? "Unstar" : "Star"}"
+          >${starred ? "★" : "☆"}</button>
+        <div>
+          <div class="title">${esc(label(m))}
+            <button class="rename" data-rename="${esc(m.path)}" title="Rename">rename</button>
+            ${here ? `<span class="meta">open</span>` : ""}</div>
+          <div class="who">${(m.models || []).map(dot).join("")}
+            <span class="sub">${(m.models || []).map(esc).join(" · ")}</span></div>
+          <div class="sub">${m.turns} turns · ${outcome}${
+            m.spent_usd != null ? ` · $${Number(m.spent_usd).toFixed(2)}` : ""
+          }</div>
+        </div>
+        <div class="right">${esc(when)}${approx ? `<br><span class="approx">from file</span>` : ""}
+          <br>seed ${m.seed ?? "?"}</div>
+      </div>`;
+      })
+      .join("") ||
+    `<div class="empty" style="padding:14px">${
+      all.length ? "Nothing matches that search." : "No matches indexed. Run <b>make library</b>."
+    }</div>`;
+}
+
+function openLibrary(show) {
+  $("libWrap").hidden = !show;
+  if (show) {
+    drawLibrary();
+    $("libFind").focus();
+  }
+}
+
+function wireLibrary() {
+  const shelf = (S.library || []).length;
+  // With nothing to switch to, the title is not a control. Better than a button
+  // that opens an empty box and teaches the visitor it does nothing.
+  if (!shelf) {
+    $("libBtn").querySelector(".caret").remove();
+    $("libBtn").removeAttribute("aria-haspopup");
+    return;
+  }
+  $("libBtn").onclick = () => openLibrary(true);
+  $("libClose").onclick = () => openLibrary(false);
+  $("libFind").oninput = drawLibrary;
+  // Click the backdrop, not the dialog. Closing on any click inside would make
+  // the search field unusable.
+  $("libWrap").onclick = (e) => e.target === $("libWrap") && openLibrary(false);
+  addEventListener("keydown", (e) => e.key === "Escape" && openLibrary(false));
+
+  $("libList").onclick = (e) => {
+    const star = e.target.closest("[data-star]");
+    if (star) {
+      const path = star.dataset.star;
+      note(path, { star: !notes()[path]?.star });
+      drawLibrary();
+      return;
+    }
+    const rename = e.target.closest("[data-rename]");
+    if (rename) {
+      const path = rename.dataset.rename;
+      const current = notes()[path]?.name || "";
+      // `prompt` deliberately. An inline editor here would be a text input, a
+      // commit key, an escape path and a blur rule - four behaviours to get
+      // right for a field used once per match. Not `confirm`/`alert`, which are
+      // the modal calls worth avoiding.
+      const next = window.prompt("Name this match", current);
+      if (next !== null) note(path, { name: next.trim() || undefined });
+      drawLibrary();
+      return;
+    }
+    const row = e.target.closest(".match[data-path]");
+    if (!row) return;
+    const path = row.dataset.path;
+    if (path === BASE) return openLibrary(false);
+    // A full navigation rather than swapping the data in place. Terrain, scatter
+    // and resources are built once at init from the match being viewed, so
+    // loading another one means rebuilding every layer plus resetting the
+    // camera, the fold caches, the thread selection and the scrubber. The URL
+    // already selects a match; letting it do so is both less code and shareable.
+    location.search = `?match=${encodeURIComponent(path)}`;
+  };
+}
+
+/**
  * Tooltips, drawn rather than delegated to the browser.
  *
  * Every explained element already carries its text in `title`, which keeps it
@@ -1278,7 +1497,23 @@ function tooltips(root) {
 }
 
 (async function init() {
-  S.match = await (await fetch(`${BASE}/match.json`, {cache: "no-store"})).json();
+  await loadLibrary();
+
+  // Served from a directory of runs rather than from inside one: there is no
+  // match at the root, so the library *is* the page. Without this the viewer
+  // threw on a missing match.json and showed a blank canvas, which is a
+  // confusing way to say "pick something".
+  const res = await fetch(`${BASE}/match.json`, { cache: "no-store" });
+  if (!res.ok) {
+    document.querySelector("aside").hidden = true;
+    document.querySelector(".scrub").hidden = true;
+    document.querySelector(".hint").hidden = true;
+    $("status").textContent = "Pick a match";
+    wireLibrary();
+    openLibrary(true);
+    return;
+  }
+  S.match = await res.json();
 
   staticLayer.add(buildTerrain(S.match.tiles, S.match.terrain));
   staticLayer.add(buildScatter(S.match.tiles, S.match.terrain));
@@ -1371,6 +1606,7 @@ function tooltips(root) {
     panels();
   };
   tooltips(document.querySelector("aside"));
+  wireLibrary();
   $("slider").max = S.match.turns;
   $("slider").oninput = (e) => show(+e.target.value);
   $("prev").onclick = () => show(S.turn - 1);

@@ -27,6 +27,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,22 @@ from .providers.base import LLMClient, Usage
 from .resilience import CircuitBreaker, Sleeper, TokenBucket
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json"
+
+
+def _now() -> str:
+    """UTC, to the second, ISO 8601.
+
+    The only clock reading anywhere near the journal. Everything else here is
+    deliberately time-free, because determinism comes from the seed and the
+    recorded decisions and a replay that depended on when it ran would not be
+    one. This is metadata *about* a run - it sits outside the state hash, resume
+    never reads it back, and rebuilding a bundle does not change it.
+
+    It exists because nothing knew when a match happened, which is fine for a
+    replay and useless for a library of them.
+    """
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
 
 # Which adapters read a token stream, and therefore can tell a model thinking
 # from a connection that has stopped talking. Recorded as a set rather than an
@@ -221,6 +238,13 @@ class Orchestrator:
                 match_config=self.config.match.model_dump(mode="json"),
                 seats=[seat.to_json() for seat in self.config.seats],
                 state_hash=state.state_hash(),
+                # Wall-clock, purely for the humans. The journal is otherwise
+                # deliberately time-free - determinism comes from the seed and
+                # the recorded decisions, and a replay must not depend on when
+                # it happened - so this is metadata *about* the run rather than
+                # an input to it. Nothing reads it back during resume, and it
+                # sits outside the state hash.
+                started_at=_now(),
             )
 
         failures = 0
@@ -265,9 +289,15 @@ class Orchestrator:
                 reason=reason,
                 winner=winner,
                 spent_usd=round(self.ledger.spent_usd, 4),
+                finished_at=_now(),
             )
             if writer:
-                writer.finish(state, {"winner": winner, "reason": reason})
+                writer.finish(
+                    state,
+                    {"winner": winner, "reason": reason},
+                    finished_at=_now(),
+                    spent_usd=round(self.ledger.spent_usd, 4),
+                )
             return MatchResult(state, reason, winner, self.ledger, failures)
         finally:
             journal.close()

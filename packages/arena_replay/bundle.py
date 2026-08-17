@@ -380,7 +380,7 @@ class BundleWriter:
         }
         self._previous_dossiers = _dossiers(state)
 
-    def finish(self, state: State, stats: dict[str, Any] | None = None) -> Path:
+    def finish(self, state: State, stats: dict[str, Any] | None = None, **about: Any) -> Path:
         turns = self.root / "turns"
         turns.mkdir(parents=True, exist_ok=True)
 
@@ -390,6 +390,12 @@ class BundleWriter:
         self.metadata["turns"] = len(self.frames)
         self.metadata["final_turn"] = state.turn
         self.metadata["victory"] = state.victory.model_dump(mode="json") if state.victory else None
+        # Facts about the run rather than about the match: when it finished, what
+        # it cost. They belong in the bundle because the bundle is the thing that
+        # gets served and listed, and a library that had to open a journal to
+        # date an entry would need the journal published alongside it - which is
+        # exactly what the bundle exists to avoid.
+        self.metadata.update({k: v for k, v in about.items() if v is not None})
         (self.root / "match.json").write_text(_dump(self.metadata))
         (self.root / "stats.json").write_text(_dump(stats or {}))
         return self.root

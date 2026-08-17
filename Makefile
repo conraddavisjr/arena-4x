@@ -10,7 +10,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export
+.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export library
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -107,6 +107,13 @@ port-free:
 		echo "or pick another port:  make $(or $(GOAL),view3d) PORT=8124 MATCH=$(MATCH)"; \
 		exit 1; \
 	fi
+
+library:  ## Browse every match played so far. make library
+	@$(PY) scripts/build_library.py $(or $(ROOT),output)
+	@$(MAKE) -s port-free GOAL=library
+	@$(MAKE) -s stage3d MATCH=$(or $(ROOT),output)
+	@echo "library: http://localhost:$(PORT)/world.html"
+	@$(PY) -m http.server $(PORT) --bind 127.0.0.1 --directory $(or $(ROOT),output)
 
 stage3d:
 	@cp -r apps/viewer3d/vendor $(or $(MATCH),output/match-4)/vendor
