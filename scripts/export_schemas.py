@@ -67,6 +67,16 @@ def sanitize(node: Any) -> Any:
 
     out = {k: sanitize(v) for k, v in node.items() if k not in UNSUPPORTED}
 
+    # A `$ref` may not carry siblings. Pydantic emits `{"$ref": ..., "description":
+    # ...}` for a field whose type is a named enum, and OpenAI rejects it outright:
+    # "$ref cannot have keywords {'description'}". That is not pedantry - in
+    # draft-07 a `$ref` replaces its whole node, so a sibling is ambiguous by
+    # construction. The description is dropped rather than hoisted into an
+    # `allOf`, which is the other legal fix and costs bytes Anthropic's grammar
+    # budget does not have.
+    if "$ref" in out and len(out) > 1:
+        return {"$ref": out["$ref"]}
+
     # Pydantic renders a discriminated union as `oneOf`, and neither Anthropic
     # nor OpenAI supports it: both reject the request outright with
     # "'oneOf' is not permitted". `anyOf` is accepted everywhere and means the

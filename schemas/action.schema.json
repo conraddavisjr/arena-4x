@@ -227,8 +227,7 @@
           "type": "string"
         },
         "trustworthiness": {
-          "$ref": "#/$defs/Trustworthiness",
-          "description": "How much their word has been worth so far. Revise it when evidence arrives - a promise kept or broken is exactly what should move this."
+          "$ref": "#/$defs/Trustworthiness"
         }
       },
       "required": [

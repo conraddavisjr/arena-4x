@@ -115,6 +115,32 @@ the schema parity test passed, and a 108-turn dry match played through without
 complaint. **None of those ever send the schema to a vendor.** It would have
 400'd on turn one of the flagship run, on three of four seats at once.
 
+### A `$ref` may not carry a `description`
+
+Adding descriptions to the eight dossier fields - the fix for two models never
+writing an opponent model - broke OpenAI on turn one of the next run:
+
+```
+$ref cannot have keywords {'description'}
+```
+
+`trustworthiness` is an enum, so Pydantic renders it as a `$ref` to a `$defs`
+entry, and a `Field(description=...)` becomes a sibling of that `$ref`. In
+draft-07 a `$ref` *replaces* its whole node, so a sibling is ambiguous by
+construction and OpenAI rejects it rather than ignoring it. Only that one field
+of the eight was affected, which is why nothing looked wrong on inspection.
+
+The sanitizer drops the siblings now. The description is not hoisted into an
+`allOf`, which is the other legal fix, because that costs bytes Anthropic's
+grammar cap does not have - and the same guidance already reaches every model
+through the rules reference, in the cached prefix, at a tenth the price.
+
+**The gap this exposes is the interesting part.** The schema was valid to us,
+the parity test passed, `make contracts` passed, and the failure still arrived
+on a paid live turn. The dialect test asserted about keywords we *strip*; it
+had nothing to say about a keyword that is legal everywhere except beside a
+`$ref`. It does now.
+
 ### Anthropic enforces two undocumented schema limits
 
 Found by bisecting against the live API:

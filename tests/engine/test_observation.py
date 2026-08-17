@@ -468,6 +468,13 @@ def _assert_dialect(node, name: str, path: str = "") -> None:
     assert not banned, f"{name}{path} uses unsupported keywords {sorted(banned)}"
     if node.get("type") == "object" or "properties" in node:
         assert node.get("additionalProperties") is False, f"{name}{path} is an open object"
+    # A `$ref` replaces its whole node in draft-07, so a sibling keyword is
+    # ambiguous - and OpenAI rejects it with a 400 rather than ignoring it.
+    # Pydantic emits exactly this for an enum-typed field carrying a
+    # description, and nothing offline caught it: the schema was valid to us,
+    # the parity test passed, and the failure arrived on turn one of a live run.
+    if "$ref" in node:
+        assert set(node) == {"$ref"}, f"{name}{path} has siblings beside $ref: {sorted(node)}"
     for key, value in node.items():
         _assert_dialect(value, name, f"{path}.{key}")
 
