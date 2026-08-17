@@ -294,6 +294,26 @@ viewer labels the three differently, because they are three different acts:
 talk, talk with binding terms attached, and the answer that signs them or does
 not.
 
+### A model can sign a treaty without saying anything
+
+`respond_to_proposal.message` is optional, and one model used that: haiku
+accepted a ten-turn non-aggression pact with `message: null`. Every other
+acceptance in two matches came with prose, so the silent one looked like a
+missing feature - a pact appeared in the relations bar with nothing in the
+thread to account for it.
+
+It was not a missing feature and not an engine bug. It was a modelling mistake
+of mine: wordless replies were suppressed on the reasoning that an empty chat
+bubble is worse than none. True for a message, wrong for a treaty. In a
+negotiation the *act* is the content, and a civ that bound itself for ten turns
+without comment has done something worth seeing - arguably more interesting
+than the ones that explain themselves. The viewer says "signed without comment"
+now, and the reply's own reasoning that turn ("Accept p4 non-aggression pact to
+secure western border") is right there beside it.
+
+The general rule this produced: a `send_message` needs words because there the
+words are the act; a proposal or a reply does not.
+
 Two adjacent facts, both of which look like bugs and are not:
 
 - **Every message in the match was private. There were no public broadcasts at

@@ -316,11 +316,23 @@ def test_a_whole_negotiation_reaches_the_frame_not_just_chat() -> None:
     assert any(e.type == "treaty_signed" for e in events), "the outcome still fires separately"
 
 
-def test_a_silent_proposal_adds_nothing_to_the_thread() -> None:
-    """No note attached means nothing was said. An empty bubble is worse than none."""
+def test_a_wordless_proposal_and_reply_still_appear() -> None:
+    """The act is the content. Prose is optional and silence is a finding.
+
+    `respond_to_proposal.message` is optional and models use that: one signed a
+    ten-turn non-aggression pact with `message: null`. An earlier version of
+    this suppressed wordless entries on the reasoning that an empty chat bubble
+    is worse than none - true for a message, wrong for a treaty. The pact
+    appeared in the relations bar with nothing in the thread to account for it,
+    and reading the console you would conclude the engine had signed something
+    nobody agreed to.
+
+    A `send_message` with no words is still dropped, because there the words
+    *are* the act.
+    """
     from arena_replay.bundle import _messages
 
-    from arena_engine.actions import Action, Propose, pass_turn
+    from arena_engine.actions import Action, Propose, RespondToProposal, pass_turn
     from arena_engine.types import ProposalType, Terms
 
     state, _ = new_match("t", 4, ROSTER, MatchConfig(turn_limit=45))
@@ -329,7 +341,23 @@ def test_a_silent_proposal_adds_nothing_to_the_thread() -> None:
         diplomacy=[Propose(action="propose", to="p2", type=ProposalType.PEACE, terms=Terms())]
     )
     state, events = step(state, actions)
-    assert _messages(state, events) == []
+    said = _messages(state, events)
+    assert [m["kind"] for m in said] == ["proposal"]
+    assert said[0]["text"] == "", "no note written, and none invented"
+
+    pid = next(iter(state.proposals))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p2"] = Action(
+        diplomacy=[
+            RespondToProposal(action="respond_to_proposal", proposal_id=pid, response="accept")
+        ]
+    )
+    state, events = step(state, actions)
+    reply = [m for m in _messages(state, events) if m["kind"] == "reply"]
+    assert len(reply) == 1, "a treaty signed in silence is still a treaty signed"
+    assert reply[0]["response"] == "accept"
+    assert reply[0]["text"] == ""
+    assert any(e.type == "treaty_signed" for e in events)
 
 
 def test_an_unchanged_dossier_is_not_repeated(bundle) -> None:

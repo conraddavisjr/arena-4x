@@ -327,7 +327,12 @@ def _messages(state: State, events: list[Event]) -> list[dict[str, Any]]:
             **({"type": e.payload["type"]} if kind == "proposal" else {}),
         }
         for e in events
-        if (kind := SPOKEN.get(e.type)) and e.payload.get("text")
+        # A message needs words - an empty chat bubble says nothing. A proposal
+        # or a reply does not: the act is the content. A civ that accepted a
+        # ten-turn pact in silence still bound itself, and requiring prose here
+        # meant the treaty showed up in the relations bar with nothing in the
+        # thread to account for it.
+        if (kind := SPOKEN.get(e.type)) and (kind != "message" or e.payload.get("text"))
     ]
 
 

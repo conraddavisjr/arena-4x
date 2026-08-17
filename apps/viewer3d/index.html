@@ -82,14 +82,18 @@
   .fight.won{border-left-color:#4ade80}
   .fight.lost{border-left-color:#f87171}
   .k{font-weight:600}
-  .k.gold{color:#fbbf24}.k.sci{color:#38bdf8}.k.prod{color:#8b949e}
+  /* Production was grey, which in this palette is the colour of "nothing here"
+     - every disabled label and faint caption is grey - so a civ out-producing
+     the table looked like an empty bar. Violet rather than the combat purple
+     below it, which is redder; the two never share a row. */
+  .k.gold{color:#fbbf24}.k.sci{color:#38bdf8}.k.prod{color:#a78bfa}.k.food{color:#4ade80}
   .k.mil{color:#f87171}.k.pub{color:#4ade80}.k.dm{color:#f472b6}
   .bars{display:inline-flex;width:100%;height:8px;border-radius:2px;overflow:hidden;
     background:#1b222c;min-width:56px}
   .bars i{display:block;height:100%}
   .bars i.gold{background:#fbbf24}
   .bars i.sci{background:#38bdf8}
-  .bars i.prod{background:#8b949e}
+  .bars i.prod{background:#a78bfa}
   .bars i.mil{background:#f87171}
   .bars i.food{background:#4ade80}
   .bars i.war{background:#f87171}
@@ -107,6 +111,20 @@
   thead th{color:var(--dim);font-weight:500;font-size:11px;border-bottom:1px solid var(--line)}
   thead th[title]{cursor:help;text-decoration:underline dotted var(--faint);
     text-underline-offset:3px}
+  /* A tooltip we draw ourselves. The native `title` gives the help cursor and
+     then, in this narrow panel, often nothing else - the browser wants a
+     second of motionless hover and puts the bubble wherever it likes, which on
+     a column header at the edge of the pane is frequently off-screen. If the
+     column names need explaining at all, the explanation has to actually
+     arrive. */
+  /* Shown and hidden outright, with no fade. A tooltip that animates in is a
+     tooltip that is briefly unreadable, and a half-opaque box over a table of
+     numbers is worse than no box - the two sets of digits interleave. */
+  #tip{position:fixed;z-index:50;max-width:280px;pointer-events:none;display:none;
+    background:#0d1117;border:1px solid #33404f;border-radius:6px;
+    padding:7px 9px;font-size:11px;line-height:1.45;color:var(--ink);
+    box-shadow:0 6px 20px #000a}
+  #tip.on{display:block}
   .civ{display:flex;align-items:center;gap:6px}
   .dot{width:9px;height:9px;border-radius:50%;flex:none}
   .dead{opacity:.4;text-decoration:line-through}
@@ -139,6 +157,13 @@
   #dossier li.fresh::marker{color:#4ade80}
   .edited{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#4ade80;
     border:1px solid #245c38;border-radius:3px;padding:1px 5px}
+  /* Same green as `.edited`, deliberately: the outline on the picker and the
+     word on the card are one fact, so they should not be two colours. */
+  button.who-btn.wrote{border-color:#4ade80;color:#d5f5e0}
+  button.who-btn.wrote::after{content:"";width:5px;height:5px;border-radius:50%;
+    background:#4ade80;display:inline-block;margin-left:5px;vertical-align:middle}
+  #dossier .card[data-doc]{cursor:pointer}
+  #dossier .card[data-doc]:hover{border-color:#33404f}
   .trust{font-size:11px;padding:1px 6px;border-radius:3px;border:1px solid var(--line)}
   .trust.high{color:#4ade80;border-color:#245c38}
   .trust.medium{color:#fbbf24;border-color:#5c4a24}
@@ -159,6 +184,14 @@
   .chan.proposal{color:#c084fc;border:1px solid #4a2a6b}
   .chan.reply.accept{color:#4ade80;border:1px solid #245c38}
   .chan.reply.reject{color:#f87171;border:1px solid #6b2626}
+  /* A wordless act, said plainly. A blank line under a chip reads as a broken
+     renderer; "signed without comment" reads as the choice it was. */
+  .wordless{color:var(--faint);font-style:italic}
+  /* A thread that moved this turn. The count alone does not say *when*, so
+     finding the live conversation meant opening each tab in turn. */
+  button.thread.live{border-color:#2f6feb;box-shadow:inset 0 0 0 1px #2f6feb33}
+  button.thread.live::after{content:"";width:5px;height:5px;border-radius:50%;
+    background:#2f6feb;display:inline-block;margin-left:5px;vertical-align:middle}
   .msg .meta .dot{width:8px;height:8px;display:inline-block;vertical-align:middle;
     margin-right:3px}
   .msg{cursor:pointer}
@@ -211,6 +244,7 @@
   <details><summary>Events<i id="n-events"></i></summary><div id="events"></div></details>
   <details><summary>Signals<i id="n-signals"></i></summary><div id="signals"></div></details>
 </aside>
+<div id="tip" role="tooltip" aria-hidden="true"></div>
 
 <script type="importmap">
 {"imports":{"three":"./vendor/three.module.min.js","three/":"./vendor/"}}
@@ -220,7 +254,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/OrbitControls.js";
 import {
   HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
-  buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements,
+  buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements, buildPacts,
   unitModel, baseGeometry, surfaceAtlas,
 } from "./world.js";
 
@@ -296,7 +330,13 @@ addEventListener("resize", resize);
 // --- data ------------------------------------------------------------------
 async function loadFrame(turn) {
   if (cache.has(turn)) return cache.get(turn);
-  const res = await fetch(`${BASE}/turns/${String(turn).padStart(4,"0")}.json`);
+  // `no-store`, because two different matches serve entirely different content
+  // at identical URLs. Point the viewer at a second bundle on the same port and
+  // the browser answers `turns/0011.json` out of cache from the *first* one -
+  // so the board, the threads and the cost table all describe a match you are
+  // not looking at, with nothing on screen to say so. Costs nothing here: the
+  // frames are cached in `cache` for the session anyway.
+  const res = await fetch(`${BASE}/turns/${String(turn).padStart(4,"0")}.json`, {cache: "no-store"});
   const frame = await res.json();
   cache.set(turn, frame);
   return frame;
@@ -505,6 +545,31 @@ async function drawTurn() {
     return [x, topOf(tile), z];
   }, hexOf));
 
+  // Who is bound to whom, as of this turn. A live pact or an alliance both
+  // count; a lapsed pact does not, because a promise that has expired is not a
+  // fact about the board any more.
+  //
+  // Fog applies. In agent mode a civ sees only the treaties it is party to -
+  // knowing that two rivals have secretly agreed not to fight each other is
+  // exactly the sort of thing an agent has to *earn*, and handing it over on
+  // the board would quietly answer the question the replay exists to ask.
+  const bonds = new Map();
+  for (const [pair, v] of Object.entries(f.relations || {})) {
+    const live = v.state === "alliance" || (v.pact_until && v.pact_until >= S.turn);
+    if (!live) continue;
+    const [a, b] = pair.split("|");
+    if (S.mode === "agent" && S.focus && a !== S.focus && b !== S.focus) continue;
+    const kind = v.state === "alliance" ? "alliance" : "pact";
+    for (const [self, other] of [[a, b], [b, a]]) {
+      if (!bonds.has(self)) bonds.set(self, []);
+      bonds.get(self).push({ who: other, kind });
+    }
+  }
+  dynamicLayer.add(buildPacts(S.match.tiles, owners, bonds, (tile) => {
+    const [x, , z] = at(tile);
+    return [x, topOf(tile), z];
+  }, hexOf));
+
   // Units, one instanced mesh per type plus a shared ownership ring.
   const visible = f.units.filter((u) => !lit || lit.has(u.at));
   const bases = instanced(baseGeometry(), visible.length, { transparent: true, opacity: 0.9 });
@@ -571,8 +636,17 @@ function knows(playerId) {
 
 function dossierPick(ev) {
   const b = ev.target.closest(".who-btn");
-  if (!b) return;
-  S.dossierOf = b.dataset.who;
+  if (b) {
+    S.dossierOf = b.dataset.who;
+    S.dossierOpen = null;
+    panels();
+    return;
+  }
+  // A card in the "all" view opens to its full text. Checked after the picker
+  // because the picker sits inside the same container.
+  const card = ev.target.closest(".card[data-doc]");
+  if (!card) return;
+  S.dossierOpen = S.dossierOpen === card.dataset.doc ? null : card.dataset.doc;
   panels();
 }
 
@@ -771,9 +845,16 @@ function drawDossier(f) {
   const list = (items, old) => (items || []).map((x) =>
     `<li class="${(old||[]).includes(x) ? "" : "fresh"}">${esc(x)}</li>`).join("");
   const showAll = S.mode !== "agent" && S.dossierOf === "all";
+  // Who revised their notes on the turn being viewed. Carried onto the picker
+  // itself so the answer to "did anyone write anything" is visible without
+  // opening four tabs to find out - which is the difference between reading a
+  // panel and interrogating it.
+  const editedNow = (pid) => !!(f.dossiers || {})[pid];
   const picker = S.mode === "agent" ? "" : `<div class="picker">
     <button class="who-btn" data-who="all" aria-pressed="${showAll}">all</button>${
-    S.match.civs.map((c) => `<button class="who-btn" data-who="${c.player_id}"
+    S.match.civs.map((c) => `<button class="who-btn ${editedNow(c.player_id) ? "wrote" : ""}"
+      data-who="${c.player_id}" title="${editedNow(c.player_id)
+        ? "revised its dossier this turn" : "no change this turn"}"
       aria-pressed="${!showAll && c.player_id === who}">${esc(c.model || c.civ_name)}</button>`).join("")
   }</div>`;
   // Said plainly, because it is the panel people most often misread: this is
@@ -790,10 +871,31 @@ function drawDossier(f) {
     $("dossier").innerHTML = picker + note + S.match.civs.map((c) => {
       const d = S.dossiers?.[c.player_id];
       const changed = !!(f.dossiers || {})[c.player_id];
-      return `<div class="card"><div class="who">
+      // Clamped by default and openable, rather than clamped full stop. The
+      // summary is what makes four dossiers comparable at a glance; the full
+      // text is what makes any one of them worth reading, and truncating a
+      // model's own words with no way to see the rest is the one thing this
+      // panel should never do.
+      const open = S.dossierOpen === c.player_id;
+      // This civ's own previous notes, not the picker's. Passing the wrong
+      // one would mark every line "fresh" and turn the change highlighting
+      // into decoration.
+      const prev = S.dossiersBefore?.[c.player_id];
+      return `<div class="card ${open ? "open" : ""}" data-doc="${c.player_id}">
+        <div class="who">
         <span class="dot" style="background:${CSS[c.colour]}"></span>${esc(c.model || c.civ_name)}
-        ${changed ? `<span class="edited">edited</span>` : ""}</div>
-        ${!d ? `<p class="empty">Nothing written yet.</p>` : `
+        ${changed ? `<span class="edited">edited</span>` : ""}
+        <span class="meta">${d ? (open ? "▾" : "▸") : ""}</span></div>
+        ${!d ? `<p class="empty">Nothing written yet.</p>` : open ? `
+        <p><b>Doctrine.</b> ${esc(d.doctrine || "—")}</p>
+        ${(d.opponent_models || []).map((m) => `<p><b>${esc(nameOf(m.player_id))}</b>
+          <span class="trust ${m.trustworthiness}">${m.trustworthiness}</span><br>
+          ${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`).join("")
+          || `<p class="meta">no opponent models</p>`}
+        ${(d.standing_commitments || []).length ? `<p><b>Commitments.</b></p>
+          <ul>${list(d.standing_commitments, prev?.standing_commitments)}</ul>` : ""}
+        ${(d.lessons || []).length ? `<p><b>Lessons.</b></p>
+          <ul>${list(d.lessons, prev?.lessons)}</ul>` : ""}` : `
         <p class="clamp">${esc(d.doctrine || "no doctrine")}</p>
         <p class="meta">${(d.opponent_models || []).length
             ? (d.opponent_models || []).map((m) =>
@@ -894,7 +996,8 @@ function drawSignals() {
       ])}<span class="n">${g.said || "0"}</span></div>
     </div>`;
   }).join("") + `<div class="tick" style="margin-top:8px">economy is
-    <b class="k gold">gold</b> / <b class="k sci">science</b> / <b class="k prod">production</b>,
+    <b class="k food">food</b> / <b class="k gold">gold</b> / <b class="k sci">science</b> /
+    <b class="k prod">production</b>, named in the order they are drawn -
     each scaled against the strongest civ · army is the
     <b class="k mil">military</b> share of units · talk is
     <b class="k pub">public</b> / <b class="k dm">private</b> · the wild is
@@ -966,19 +1069,29 @@ async function drawDiplomacy(relationLines) {
     `<span class="dot" style="background:${cssOf(pid)}"></span>${esc(nameOf(pid))}`;
   const tabs = visible.map(([key, list]) => {
     const sofar = list.filter((m) => m.turn <= S.turn);
+    // Whether anything landed here on the turn being viewed. A thread that just
+    // moved is the one worth opening, and finding it by clicking each tab in
+    // turn is not reading, it is searching.
+    const live = sofar.some((m) => m.turn === S.turn);
     let label;
     if (key === "public") {
       label = "public";
     } else {
-      // Ordered by who opened it, with a single arrow. A double arrow said
-      // "these two spoke" and threw away the more interesting half - who went
-      // first. The dots carry the same colours as the board and every other
-      // panel, so a thread can be tied to a civ without reading the name.
-      const opener = (sofar[0] || list[0]).from;
-      const other = key.split("|").find((p) => p !== opener) || opener;
-      label = `${chip(opener)} <span class="arrow">→</span> ${chip(other)}`;
+      // The arrow points from whoever spoke *last*, as of this turn - so a
+      // reply flips it. On turn 5 that reads gemini -> gpt because gemini
+      // opened; on turn 6 it reads gpt -> gemini because gpt answered, which
+      // is the fact you want without opening the thread.
+      //
+      // It used to be pinned to whoever opened the thread and never moved
+      // again, which is true and static: correct on turn 5 and stale for the
+      // fifteen turns after it.
+      const latest = sofar[sofar.length - 1] || list[0];
+      const from = latest.from;
+      const to = latest.to || key.split("|").find((p) => p !== from) || from;
+      label = `${chip(from)} <span class="arrow">→</span> ${chip(to)}`;
     }
-    return `<button class="thread" data-key="${key}" aria-pressed="${key===S.thread}"
+    return `<button class="thread ${live ? "live" : ""}" data-key="${key}"
+      aria-pressed="${key===S.thread}"
       >${label} <span class="meta">${sofar.length}</span></button>`;
   }).join("");
 
@@ -988,7 +1101,10 @@ async function drawDiplomacy(relationLines) {
   // turn N" - the fog, the dossier fold, the cost fold - and this one silently
   // was not, which spoils the replay and breaks the one question the scrubber
   // exists to answer: what did they know, and when.
-  const upToNow = (threads.get(S.thread) || []).filter((m) => m.turn <= S.turn);
+  // Newest first. A negotiation is read from its live end - what was just said
+  // is what you are deciding about - and a chronological thread buries that
+  // under everything already known, further down the further the match runs.
+  const upToNow = (threads.get(S.thread) || []).filter((m) => m.turn <= S.turn).reverse();
   const body = upToNow.length ? upToNow.map((m) => {
     // Three things arrive in a thread and they are not the same act. A message
     // is talk; a proposal is talk with a binding offer attached; a reply either
@@ -1004,7 +1120,14 @@ async function drawDiplomacy(relationLines) {
         tag ? ` <span class="chan ${m.kind} ${m.response||""}">${tag}</span>` : ""} turn ${m.turn} ·
         <span class="dot" style="background:${cssOf(m.from)}"></span>${nameOf(m.from)}${
         m.to ? ` → <span class="dot" style="background:${cssOf(m.to)}"></span>${nameOf(m.to)}`
-             : " · to everyone"}</div>${esc(m.text)}
+             : " · to everyone"}</div>${
+        // Said in so many words, because a blank space below a chip reads as a
+        // rendering failure rather than as a choice. A model signing a pact
+        // without comment is a real and slightly cold thing to have done, and
+        // the panel should say so rather than leave a gap.
+        m.text ? esc(m.text)
+               : `<span class="wordless">${m.kind === "reply"
+                    ? `signed without comment` : `sent with no note attached`}</span>`}
       ${m.turn === S.turn && f_reasoning(m.from) ? `<div class="aside">
         <b>its plan that turn:</b> ${esc(f_reasoning(m.from))}</div>` : ""}</div>`;
   }).join("") : `<div class="empty">Nothing said in this thread yet.</div>`;
@@ -1049,8 +1172,80 @@ function togglePlay() {
   }, 700);
 }
 
+/**
+ * Tooltips, drawn rather than delegated to the browser.
+ *
+ * Every explained element already carries its text in `title`, which keeps it
+ * available to screen readers and to anyone reading the DOM - but the native
+ * bubble is unreliable exactly where it is needed here. It waits about a
+ * second, it renders wherever it likes, and on a column header at the right
+ * edge of a narrow panel it lands off-screen often enough that the honest
+ * description is "the cursor changes and nothing happens".
+ *
+ * Bound once on the panel by delegation, so anything gaining a `title` later
+ * gets this for free. `title` is moved to `data-tip` while hovered and put
+ * back on the way out, which suppresses the duplicate native bubble without
+ * losing the attribute.
+ */
+function tooltips(root) {
+  const tip = $("tip");
+  let held = null;
+
+  const place = (el) => {
+    const box = el.getBoundingClientRect();
+    // Laid out but not yet painted, so it can be measured before it is placed -
+    // otherwise the first frame appears at the previous tooltip's position.
+    tip.style.visibility = "hidden";
+    tip.classList.add("on");
+    const own = tip.getBoundingClientRect();
+    // Prefer below-left of the element, then flip up or in when that would
+    // leave the viewport. The panel is at the right edge, so the horizontal
+    // clamp is the one that actually fires.
+    const left = Math.max(8, Math.min(box.left, window.innerWidth - own.width - 8));
+    const below = box.bottom + 6;
+    const top = below + own.height > window.innerHeight - 8 ? box.top - own.height - 6 : below;
+    tip.style.left = `${left}px`;
+    tip.style.top = `${Math.max(8, top)}px`;
+    tip.style.visibility = "";
+  };
+
+  const show = (el) => {
+    const text = el.getAttribute("title") || el.dataset.tip;
+    if (!text) return;
+    if (el.hasAttribute("title")) {
+      el.dataset.tip = text;
+      el.removeAttribute("title");
+    }
+    held = el;
+    tip.textContent = text;
+    tip.setAttribute("aria-hidden", "false");
+    place(el);
+  };
+
+  const hide = () => {
+    if (held?.dataset.tip) {
+      held.setAttribute("title", held.dataset.tip);
+      delete held.dataset.tip;
+    }
+    held = null;
+    tip.classList.remove("on");
+    tip.setAttribute("aria-hidden", "true");
+  };
+
+  root.addEventListener("mouseover", (ev) => {
+    const el = ev.target.closest("[title], [data-tip]");
+    if (el === held) return;
+    hide();
+    if (el && root.contains(el)) show(el);
+  });
+  root.addEventListener("mouseleave", hide);
+  // Scrolling the panel moves the anchor out from under a fixed-position
+  // bubble, which then points at the wrong row.
+  root.addEventListener("scroll", hide, true);
+}
+
 (async function init() {
-  S.match = await (await fetch(`${BASE}/match.json`)).json();
+  S.match = await (await fetch(`${BASE}/match.json`, {cache: "no-store"})).json();
 
   staticLayer.add(buildTerrain(S.match.tiles, S.match.terrain));
   staticLayer.add(buildScatter(S.match.tiles, S.match.terrain));
@@ -1091,6 +1286,7 @@ function togglePlay() {
     camera.position.set(S.home.target.x, S.home.dist * 1.05, S.home.target.z + 0.01);
     controls.update();
   };
+  tooltips(document.querySelector("aside"));
   $("slider").max = S.match.turns;
   $("slider").oninput = (e) => show(+e.target.value);
   $("prev").onclick = () => show(S.turn - 1);
