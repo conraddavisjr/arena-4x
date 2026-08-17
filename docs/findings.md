@@ -327,19 +327,29 @@ one thing. Both blocks are their own functions now.
 
 ## Costs
 
-Measured, not estimated. Shakeout roster, four live vendors. Cache rates are
-cached-over-input, on the corrected accounting above.
+Measured, not estimated. Shakeout roster, seed 4, a complete 20-turn match on
+the corrected accounting - the first run where all four cache figures are the
+same quantity (cached over total input).
 
-| Seat | Model | $/turn | Median latency | Cache read | Output tokens |
-|---|---|---|---|---|---|
-| p1 | `claude-haiku-4-5` | $0.0133 | 18s | 56% | 30k |
-| p2 | `gpt-5.4-mini` | $0.0344 | 109s | 49% | 293k |
-| p3 | `gemini-3.6-flash` | $0.0037 | 24s | 0% | 16k |
-| p4 | `grok-4.3` | $0.0016 | 10s | 9% | 11k |
+| Seat | Model | $/turn | Median latency | Cache read | Output tokens | Score |
+|---|---|---|---|---|---|---|
+| p1 | `claude-haiku-4-5` | $0.0142 | 23s | 50% | 36k | 48 |
+| p2 | `gpt-5.4-mini` | $0.0388 | 120s | 58% | 379k | 94 |
+| p3 | `gemini-3.6-flash` | $0.0044 | 35s | 0% | 20k | **101** |
+| p4 | `grok-4.3` | $0.0014 | 9s | 22% | 10k | 71 |
 
-**$0.053 per turn for the whole table**, over a 19-turn run. 300 turns
-extrapolates to ~$16 on this roster. Flagship models are several times that and
-still sit inside the $75 cap.
+**$0.059 per turn for the whole table.** 300 turns extrapolates to ~$18 on this
+roster. Flagship models are several times that and still sit inside the $75 cap.
+
+The result that makes the case for measuring cost per point at all: **the seat
+that won spent a twentieth of what the second-place seat spent.** Gemini took
+101 at $0.087 while gpt-5.4-mini took 94 at $0.777, having produced *nineteen
+times* as many output tokens. Cheapest per point was grok at 46 points per
+100k tokens against gpt's 18.
+
+One match on one seed proves nothing about model quality, and the caveat below
+about lost turns matters before anyone reads a ranking into it. But it is
+exactly the shape of finding a leaderboard by score alone would hide.
 
 **One seat is 65% of the bill and ten times the latency of another.**
 `gpt-5.4-mini` produced 293k output tokens against grok's 11k - twenty-six
@@ -364,10 +374,16 @@ vendor bias the limit exists to avoid.
 
 ### A timeout costs two turns, not one, and cannot be retried
 
-A completed 20-turn match lost two agent-turns to the 420s deadline: p1 on turn
-7, p4 on turn 19. Both are stranger than they look, because **p1's median
-latency is 18 seconds**. A 23x outlier on a seat that fast is a stalled request,
-not a model thinking.
+Two complete 20-turn matches lost agent-turns to the 420s deadline. The second
+run is the alarming one: **p1 timed out on turns 13 and 14 back to back**, then
+missed the cache on 15, 19 and 20. Its score came in last at 48, against 71 for
+the same model in the first match.
+
+That is the failure this limit exists to prevent, arriving through the limit
+itself. **p1's median latency is 23 seconds.** A 420s timeout on that seat is
+not a model thinking, it is a stalled request - and the seat is being scored
+down for a transport problem rather than for how it played, which is precisely
+the vendor bias the whole design is trying to avoid.
 
 Two structural problems behind it:
 
@@ -383,11 +399,18 @@ Two structural problems behind it:
   journal shows exactly that: `agent_failure` on turn 7, `cache_miss` on turn 8.
 
 The fix is not simply a smaller SDK timeout. 200s would leave room for a real
-retry, and would also cut off a seat whose median is 109s and whose calls run to
-~15,500 output tokens - manufacturing the vendor bias the 420s exists to
+retry, and would also cut off a seat whose median is 120s and whose calls run to
+~19,000 output tokens - manufacturing the vendor bias the 420s exists to
 prevent. The two limits are answering different questions and currently share
-one number. **Left as-is deliberately**: changing timeout policy while a
-comparison run is in flight would invalidate the comparison it is measuring.
+one number.
+
+**The right shape is probably an idle timeout rather than a total one.** A
+model streaming tokens is alive however long it takes; a connection that has
+produced no bytes for two minutes is hung. That distinction costs a slow
+thinker nothing and catches a stall in a fraction of the time, which is the
+combination a total-duration cap cannot offer at any setting. It needs a change
+in all four adapters and live verification, so it is written down here rather
+than done in passing.
 
 Same reason a resume always pays a cache write on its first turn: any gap longer
 than five minutes is a cold prefix. Worth knowing before reading a resumed run's
