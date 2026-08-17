@@ -241,6 +241,28 @@ having them.
 
 ---
 
+## Viewer bugs, which fail the same way
+
+Both of these drew nothing and said nothing. A panel that throws leaves a
+stack trace; a panel that is never reached leaves an empty box that reads as
+"no data this turn", which is a plausible answer in a game viewer and so does
+not prompt anyone to look.
+
+- **A `return` in a nested branch returned from the whole render.** The
+  dossier's "all civs" view ended in a bare `return`, written to mean "done
+  with the dossier" and actually meaning "done with `panels()`". Everything
+  after it - Events, Signals, every count badge - stopped rendering. "All" is
+  the *default* view, so this was the normal case, not an edge one. Found by
+  staging the viewer against a free bot match before pointing it at a paid
+  bundle, which is now the habit.
+- **A block placed above the values it read** threw a temporal-dead-zone error
+  on every render, and the page absorbed it by not drawing the sections below.
+
+The rule both suggest: a `return` is only trustworthy in a function that does
+one thing. Both blocks are their own functions now.
+
+---
+
 ## Costs
 
 Measured, not estimated. Shakeout roster, 30 turns, four live vendors.
@@ -337,3 +359,6 @@ saying which case is which.
    concluding the model is weak. That mistake cost two days.
 4. If a vendor error names something that sounds like a credential or a billing
    problem, verify the model id first.
+5. Stage the viewer against a bot match before a paid one. It costs nothing and
+   it is the only way to tell "this match had no diplomacy" from "this panel
+   never rendered".
