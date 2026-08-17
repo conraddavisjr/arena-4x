@@ -51,15 +51,48 @@ NEEDS_FLATTENING = frozenset({"anthropic"})
 STRICT = ("orders",)
 LOOSE = ("diplomacy",)
 
+# Models whose grammar budget shrinks once extended thinking is on, and which
+# therefore cannot take the strict variant at all.
+#
+# This is the third distinct Anthropic schema limit this project has run into,
+# and the least obvious: **turning thinking on costs grammar headroom.** The
+# strict dialect is 5,347 bytes and 400s with thinking enabled on
+# `claude-haiku-4-5`; the same request without thinking is fine, and a 4,206-byte
+# schema with thinking is fine. Loosening `orders` costs 423 bytes and takes it
+# to 4,924, which is accepted - measured live, returning valid orders and a real
+# reasoning trace.
+#
+# It applies to pre-4.6 models because those take a `budget_tokens` thinking
+# block rather than adaptive thinking. Verified the other way too: `claude-opus-5`
+# with adaptive thinking accepts the strict schema unchanged, so the flagship
+# roster keeps the stronger guarantee and only the seat that cannot have it gives
+# it up.
+#
+# The cost is real and is the reason the asymmetry above exists at all: a
+# loosely-flattened `orders` lets a model answer `{"action": "found_city"}` with
+# no unit, which wastes that order. `actions.parse` drops such an entry and lets
+# the rest of the turn through, and the merged description spells out what each
+# action requires. That is a worse guarantee than the strict variant and a much
+# better one than a seat that cannot reason at all - which was the alternative,
+# and which would have meant either a reasoning-disabled civ in a four-way
+# comparison or paying three times the price for a different model.
+LOOSE_ORDERS_BELOW = ("claude-haiku-", "claude-sonnet-4-", "claude-opus-4-5")
 
-def for_provider(schema: dict[str, Any], provider: str) -> dict[str, Any]:
-    """The action schema as this vendor will accept it."""
+
+def needs_loose_orders(provider: str, model: str | None) -> bool:
+    return provider == "anthropic" and bool(model) and model.startswith(LOOSE_ORDERS_BELOW)
+
+
+def for_provider(schema: dict[str, Any], provider: str, model: str | None = None) -> dict[str, Any]:
+    """The action schema as this vendor, running this model, will accept it."""
     if provider not in NEEDS_FLATTENING:
         return schema
+    strict = () if needs_loose_orders(provider, model) else STRICT
+    loose = ("orders", *LOOSE) if not strict else LOOSE
     # Descriptions come off *before* flattening, not after: the merge writes a
     # description of its own spelling out which fields each action needs, and
     # that one is load-bearing. Stripping last would have removed it.
-    return prune(flatten_unions(strip_descriptions(schema)))
+    return prune(flatten_unions(strip_descriptions(schema), strict=strict, loose=loose))
 
 
 def strip_descriptions(schema: dict[str, Any]) -> dict[str, Any]:
@@ -83,7 +116,12 @@ def strip_descriptions(schema: dict[str, Any]) -> dict[str, Any]:
     return {k: strip_descriptions(v) for k, v in schema.items() if k != "description"}
 
 
-def flatten_unions(schema: dict[str, Any]) -> dict[str, Any]:
+def flatten_unions(
+    schema: dict[str, Any],
+    *,
+    strict: tuple[str, ...] = STRICT,
+    loose: tuple[str, ...] = LOOSE,
+) -> dict[str, Any]:
     """Collapse every array-of-union into an array of one merged object.
 
     The branches are mutually exclusive and discriminated by `action`, so the
@@ -137,11 +175,11 @@ def flatten_unions(schema: dict[str, Any]) -> dict[str, Any]:
             "required": sorted(properties) if strict else ["action"],
         }
 
-    for key, strict in ((k, True) for k in STRICT):
+    for key in strict:
         node = out.get("properties", {}).get(key)
         if node and isinstance(node.get("items"), dict) and "anyOf" in node["items"]:
-            node["items"] = merge(node["items"], strict)
-    for key in LOOSE:
+            node["items"] = merge(node["items"], True)
+    for key in loose:
         node = out.get("properties", {}).get(key)
         if node and isinstance(node.get("items"), dict) and "anyOf" in node["items"]:
             node["items"] = merge(node["items"], False)

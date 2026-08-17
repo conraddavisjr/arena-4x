@@ -171,6 +171,8 @@ class OpenAIClient:
             latency_ms=latency_ms,
             stop_reason=getattr(response, "status", None),
             thinking=_reasoning_of(response),
+            effort=self._reasoning_effort,
+            effort_sent=self._reasoning_effort,
         )
 
     async def aclose(self) -> None:
@@ -274,6 +276,8 @@ class XAIClient:
             # extension riding a shared schema - so it is read by name and
             # tolerated absent rather than declared.
             thinking=getattr(choice.message, "reasoning_content", None) or None,
+            effort=self._reasoning_effort,
+            effort_sent=self._reasoning_effort,
         )
 
     async def aclose(self) -> None:

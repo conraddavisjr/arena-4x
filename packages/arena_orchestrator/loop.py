@@ -163,7 +163,7 @@ class Orchestrator:
                 # Anthropic compiles the schema into a grammar and rejects this
                 # one as too large; it gets a flattened variant. Everyone else
                 # takes the base schema unchanged. See dialects.py.
-                schema=for_provider(self.schema, seat.provider),
+                schema=for_provider(self.schema, seat.provider, seat.model),
                 bucket=self._bucket(seat.provider),
                 breaker=self._breaker(seat.provider),
                 timeout_s=self.config.turn_timeout_s,
@@ -356,13 +356,16 @@ class Orchestrator:
         for turn in outcome.turns:
             cost = self.ledger.charge(player_id, turn.model, turn.usage)
             row = self._spend.setdefault(
-                player_id, {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0}
+                player_id,
+                {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0, "effort": None},
             )
             row["usd"] = round(row["usd"] + cost, 6)
             row["input"] += turn.usage.input_tokens
             row["output"] += turn.usage.output_tokens
             row["cached"] += turn.usage.cache_read_tokens
             row["ms"] += turn.latency_ms
+            row["effort"] = turn.effort
+            row["effort_sent"] = turn.effort_sent
             if self.allowance:
                 self.allowance.charge(player_id, turn.usage)
             journal.append(
@@ -388,6 +391,11 @@ class Orchestrator:
                 # and one worth being able to see without opening 80 payloads.
                 reasoning_tokens=turn.usage.reasoning_tokens,
                 thinking_chars=len(turn.thinking or ""),
+                # What this seat was asked for. Journalled beside the tokens
+                # because the two only mean something together: 600k output
+                # tokens at `low` and at `high` are different findings.
+                effort=turn.effort,
+                effort_sent=turn.effort_sent,
             )
             journal.transcript(
                 state.turn + 1, player_id, agent.system, user, turn.text, turn.thinking

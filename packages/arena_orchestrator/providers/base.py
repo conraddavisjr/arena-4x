@@ -101,6 +101,19 @@ class Turn:
     # which is the account a model writes knowing it will be read - this is the
     # deliberation behind that account.
     thinking: str | None = None
+    # What this seat was actually asked for, as the adapter sent it. Recorded
+    # because nothing recorded it, and so "were all four asked the same question
+    # this turn" was unanswerable from the artifacts - which is exactly how one
+    # seat came to play every match of this project with reasoning off while the
+    # seat beside it was set to `high`.
+    #
+    # Two fields, because the vendors do not share an instrument. `effort` is the
+    # match-level intent every seat gets; `effort_sent` is the vendor form, which
+    # for a pre-4.6 Anthropic model is a token budget rather than an enum. Under
+    # self-selected effort this stops being configuration and becomes a move, and
+    # then the difference between the two is worth being able to read.
+    effort: str | None = None
+    effort_sent: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 

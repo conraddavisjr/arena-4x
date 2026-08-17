@@ -86,7 +86,8 @@ def main() -> None:
         if r["type"] != jl.AGENT_CALL:
             continue
         row = spend_by_turn.setdefault(r["turn"], {}).setdefault(
-            r["player_id"], {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0}
+            r["player_id"],
+            {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0, "effort": None},
         )
         usage = Usage(
             input_tokens=r.get("input_tokens", 0),
@@ -108,6 +109,8 @@ def main() -> None:
         row["output"] += usage.output_tokens
         row["cached"] += usage.cache_read_tokens
         row["ms"] += r.get("latency_ms", 0)
+        row["effort"] = r.get("effort")
+        row["effort_sent"] = r.get("effort_sent")
 
     for record in recovered.turns:
         actions = {

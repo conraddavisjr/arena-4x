@@ -137,6 +137,8 @@ class GoogleClient:
             latency_ms=latency_ms,
             stop_reason=status,
             thinking=_thoughts(response),
+            effort=self._effort,
+            effort_sent=f"thinking_level={self._effort.upper()}",
         )
 
     async def aclose(self) -> None:

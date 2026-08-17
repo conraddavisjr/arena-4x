@@ -193,6 +193,15 @@ class AnthropicClient:
             latency_ms=latency_ms,
             stop_reason=message.stop_reason,
             thinking=reasoning or None,
+            effort=self._effort,
+            # The vendor form differs from the intent on this seat: 4.6+ take the
+            # enum, everything before it takes a token budget, and both are
+            # "medium" as far as the match is concerned.
+            effort_sent=(
+                self._effort
+                if self._supports_adaptive
+                else f"budget_tokens={THINKING_BUDGET[self._effort]}"
+            ),
         )
 
     async def aclose(self) -> None:

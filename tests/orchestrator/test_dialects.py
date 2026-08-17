@@ -206,3 +206,46 @@ def test_a_body_that_is_not_json_still_raises() -> None:
         parse("not json at all")
     with pytest.raises(ValidationError):
         parse('{"reasoning": "should be an object"}')
+
+
+# ---------------------------------------------------------------------------
+# Thinking costs grammar headroom
+# ---------------------------------------------------------------------------
+
+
+def test_a_pre_4_6_model_gets_the_loose_orders_variant() -> None:
+    """The third distinct Anthropic schema limit, and the least obvious one:
+    **turning thinking on shrinks the grammar budget.**
+
+    Measured live. The strict dialect is 5,347 bytes and 400s with thinking
+    enabled on `claude-haiku-4-5`; without thinking the same bytes are fine, and
+    with thinking a 4,206-byte schema is fine. Loosening `orders` costs 423
+    bytes, lands at 4,924, and is accepted - returning valid orders and a real
+    reasoning trace.
+
+    Without this the seat had two options, both bad: play a four-way comparison
+    with reasoning disabled on one civ, or pay roughly three times the price for
+    a model that could think.
+    """
+    loose = for_provider(SCHEMA, "anthropic", "claude-haiku-4-5")
+    assert loose["properties"]["orders"]["items"]["required"] == ["action"]
+    assert len(json.dumps(loose)) < 5_000, "must fit under the with-thinking ceiling"
+
+
+def test_a_4_6_model_keeps_the_strict_variant() -> None:
+    """Only the seat that cannot have the guarantee gives it up.
+
+    `claude-opus-5` takes adaptive thinking and accepts the strict schema
+    unchanged - verified live - so the flagship roster keeps structural
+    enforcement of the fields each order needs.
+    """
+    strict = for_provider(SCHEMA, "anthropic", "claude-opus-5")
+    required = strict["properties"]["orders"]["items"]["required"]
+    assert len(required) > 1, "4.6+ models should still require every order field"
+    assert "unit_id" in required
+
+
+def test_other_vendors_are_unaffected_by_the_model() -> None:
+    for model in ("gpt-5.4-mini", "grok-4.3", "gemini-3.6-flash"):
+        for provider in ("openai", "xai", "google"):
+            assert for_provider(SCHEMA, provider, model) == SCHEMA
