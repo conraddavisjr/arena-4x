@@ -34,13 +34,13 @@ from typing import Any
 from arena_replay import BundleWriter
 
 from arena_engine import observation as obs
-from arena_engine.actions import Action
+from arena_engine.actions import Action, pass_turn
 from arena_engine.events import Event
 from arena_engine.reducer import new_match, step
 from arena_engine.types import MatchConfig, State
 
 from . import journal as jl
-from .agent import Agent
+from .agent import Agent, Outcome
 from .budget import Allowance, Ledger
 from .config import RunConfig
 from .dialects import for_provider
@@ -325,10 +325,25 @@ class Orchestrator:
         living = [pid for pid in state.civ_ids() if state.players[pid].alive]
         prompts = {pid: self._observation(state, pid) for pid in living}
 
-        results = await asyncio.gather(
-            *(self.agents[pid].take_turn(prompts[pid]) for pid in living)
-        )
-        outcomes = dict(zip(living, results, strict=True))
+        # A civ that has spent its token allowance stops being asked. This is
+        # what makes the allowance an in-game constraint rather than a number
+        # printed in the observation: without it the countdown reached zero and
+        # nothing whatsoever happened, which is how it stood - `exhausted()` was
+        # written, tested, and never called.
+        #
+        # It passes rather than being eliminated. A civ that vanishes hands its
+        # cities to nobody and rewrites the board for the other three, which
+        # would make the *other* seats' results depend on when this one ran dry.
+        # A civ that can no longer act is still a real player, still holds
+        # territory, and gets outcompeted in public - which is both a fairer
+        # consequence and far better evidence.
+        broke = [pid for pid in living if self.allowance and self.allowance.exhausted(pid)]
+        asked = [pid for pid in living if pid not in broke]
+
+        results = await asyncio.gather(*(self.agents[pid].take_turn(prompts[pid]) for pid in asked))
+        outcomes = dict(zip(asked, results, strict=True))
+        for pid in broke:
+            outcomes[pid] = Outcome(action=pass_turn(), failure="token allowance exhausted")
 
         actions: dict[str, Action] = {}
         for player_id, outcome in outcomes.items():

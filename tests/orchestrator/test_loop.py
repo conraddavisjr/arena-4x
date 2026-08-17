@@ -14,6 +14,7 @@ match* rather than a plausible-looking different one.
 
 from __future__ import annotations
 
+import collections
 import json
 from pathlib import Path
 
@@ -562,3 +563,43 @@ async def test_a_vendor_that_offers_no_trace_still_records_the_turn(tmp_path: Pa
     ]
     assert payloads and all("thinking" not in p for p in payloads)
     assert all(p["raw"] for p in payloads), "the rest of the record must survive"
+
+
+async def test_an_agent_that_spends_its_allowance_stops_being_asked(tmp_path: Path) -> None:
+    """The allowance has to bite, or it is decoration.
+
+    It did not. `Allowance.exhausted()` was written and tested and never called
+    from the loop, so the countdown reached zero, the observation kept saying
+    `tokens_remaining: 0`, and the agent kept right on being asked - which makes
+    the whole experiment a number printed on a page rather than a constraint a
+    model has to plan against.
+
+    Passing rather than eliminating is deliberate. A civ that vanishes hands its
+    cities to nobody and rewrites the board for the other three, which would make
+    *their* results depend on when this one ran dry. A civ that can no longer act
+    still holds its territory and gets outcompeted in public.
+    """
+    config = make_config(turns=6, agent_budget_awareness="tokens", allowance_tokens=1)
+    orchestrator = make_orchestrator(tmp_path, config)
+    result = await orchestrator.run()
+
+    # One token each: everyone is broke after their first turn.
+    starved = records(tmp_path, jl.AGENT_FAILURE)
+    assert starved, "running out of allowance left no trace at all"
+    assert any("allowance exhausted" in r["reason"] for r in starved)
+
+    # And it stopped costing money, which is the observable half.
+    calls = collections.Counter(r["player_id"] for r in records(tmp_path, jl.AGENT_CALL))
+    assert all(n <= 2 for n in calls.values()), f"a broke agent was still called: {calls}"
+    assert result.state.turn == 6, "the match still finishes; nobody is removed"
+
+
+async def test_the_allowance_does_nothing_when_the_experiment_is_off(tmp_path: Path) -> None:
+    """Default off, because surfacing a countdown is known to sometimes trigger
+    premature wrap-up. The baseline has to be a match nobody was rationing."""
+    await make_orchestrator(tmp_path, make_config(turns=4)).run()
+    assert not [
+        r for r in records(tmp_path, jl.AGENT_FAILURE) if "allowance" in r.get("reason", "")
+    ]
+    calls = collections.Counter(r["player_id"] for r in records(tmp_path, jl.AGENT_CALL))
+    assert all(n == 4 for n in calls.values()), "every seat plays every turn"
