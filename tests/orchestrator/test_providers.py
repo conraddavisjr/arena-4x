@@ -490,3 +490,63 @@ async def test_the_scripted_provider_fails_on_cue_then_succeeds() -> None:
             await client.complete("s", "u", SCHEMA)
     turn = await client.complete("s", "u", SCHEMA)
     assert turn.text == '{"orders": []}'
+
+
+# ---------------------------------------------------------------------------
+# Usage accounting
+# ---------------------------------------------------------------------------
+
+
+def test_every_adapter_reports_uncached_input_not_total() -> None:
+    """`Usage.input_tokens` excludes the cached portion. On every vendor.
+
+    The pricer charges `input * 1.0 + cache_read * 0.1`, so a seat that reports
+    a total where the others report a remainder pays 1.1x for tokens that
+    should cost 0.1x - eleven times over on the cached share. The OpenAI
+    Responses adapter did exactly that, and nothing caught it: the number was
+    plausible, the seat was already the expensive one, and the only visible
+    symptom was a cache-rate column whose four seats were not measuring the
+    same quantity.
+
+    Asserted across all four surfaces at once, because the contract is only
+    worth anything if it holds everywhere. Two of the four already got this
+    right and said so in a comment, which is precisely why a comment is not
+    a test.
+    """
+    from arena_orchestrator.providers.anthropic_provider import _usage as anthropic_usage
+    from arena_orchestrator.providers.google_provider import _usage as google_usage
+    from arena_orchestrator.providers.openai_provider import (
+        _completions_usage,
+        _responses_usage,
+    )
+
+    cases = {
+        "anthropic": anthropic_usage(
+            Bag(input_tokens=300, output_tokens=50, cache_read_input_tokens=700)
+        ),
+        "openai": _responses_usage(
+            Bag(
+                input_tokens=1000,
+                output_tokens=50,
+                input_tokens_details=Bag(cached_tokens=700),
+            )
+        ),
+        "xai": _completions_usage(
+            Bag(
+                prompt_tokens=1000,
+                completion_tokens=50,
+                prompt_tokens_details=Bag(cached_tokens=700),
+            )
+        ),
+        "google": google_usage(
+            Bag(total_input_tokens=1000, total_output_tokens=50, total_cached_tokens=700)
+        ),
+    }
+    for name, usage in cases.items():
+        assert usage.cache_read_tokens == 700, name
+        assert usage.input_tokens == 300, (
+            f"{name} reports {usage.input_tokens} uncached input tokens for a 1000-token "
+            f"prompt of which 700 were cached. Either it is double-counting the cached "
+            f"portion or it is not reporting it at all."
+        )
+        assert usage.input_tokens + usage.cache_read_tokens == 1000, name

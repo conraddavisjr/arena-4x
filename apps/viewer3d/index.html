@@ -623,7 +623,13 @@ function panels() {
         // Score per 100k tokens: the one number that compares a cheap model
         // playing adequately against an expensive one playing slightly better.
         const per = tokens ? (score / (tokens / 100000)) : 0;
-        const cachePct = tokens ? Math.round(100 * s.cached / tokens) : 0;
+        // Against input alone, which is what the column header promises and the
+        // only denominator that means anything: output tokens were never
+        // cacheable, so including them measures how talkative a model is rather
+        // than how well its prefix is being reused. A seat reading half its
+        // prefix from cache reported 13% purely because it thought at length.
+        const inTokens = s.input + s.cached;
+        const cachePct = inTokens ? Math.round(100 * s.cached / inTokens) : 0;
         return `<tr><td class="name" title="${c.civ_name}">
           <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
             c.model || c.civ_name}</span></td>

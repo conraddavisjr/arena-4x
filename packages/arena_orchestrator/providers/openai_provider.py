@@ -228,10 +228,22 @@ def _responses_usage(raw: Any) -> Usage:
     if raw is None:
         return Usage()
     details = getattr(raw, "input_tokens_details", None)
+    cached = _field(details, "cached_tokens")
     return Usage(
-        input_tokens=_field(raw, "input_tokens"),
+        # Inclusive of the cached portion here, exactly as on the completions
+        # surface below, so the cached count is subtracted out rather than left
+        # to be counted twice. It was not, and the arithmetic is unkind: the
+        # pricer charges `input * 1.0 + cache_read * 0.1`, so every cached token
+        # on this seat was billed at 1.1x instead of 0.1x - eleven times over.
+        #
+        # `Usage` states the contract in its docstring and the sibling function
+        # forty lines down states it again in a comment. It still went wrong,
+        # because nothing failed: the number was plausible, the seat was the
+        # expensive one anyway, and the only visible symptom was a cache-rate
+        # column whose four seats were not measuring the same thing.
+        input_tokens=max(0, _field(raw, "input_tokens") - cached),
         output_tokens=_field(raw, "output_tokens"),
-        cache_read_tokens=_field(details, "cached_tokens"),
+        cache_read_tokens=cached,
         # Reported for the efficiency stats only. These tokens are already
         # inside output_tokens, so adding them to it would bill them twice.
         reasoning_tokens=_field(getattr(raw, "output_tokens_details", None), "reasoning_tokens"),

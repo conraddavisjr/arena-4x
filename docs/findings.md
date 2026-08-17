@@ -202,6 +202,37 @@ Even so it cannot discriminate the two placements through the streaming path -
 three attempts failed - so placement is guarded by an offline assertion on the
 request shape and by a runtime `cache_miss` journal record instead.
 
+### One seat counted its cached tokens twice
+
+`Usage.input_tokens` is defined as the *uncached* input, because the pricer
+charges `input * 1.0 + cache_read * 0.1` and folding them together would hide
+the one number worth watching. Three adapters honoured that. The OpenAI
+Responses adapter passed `usage.input_tokens` through unchanged, and on that
+surface it is a total that already includes the cached portion.
+
+So every cached token on that seat was billed at **1.1x instead of 0.1x** -
+eleven times over on the cached share. Measured on a 19-turn shakeout: 65,280
+of 133,185 input tokens were cached, and the seat was overcharged $0.016 of
+$0.62. Small, because that model's cost is dominated by 292k output tokens.
+On a flagship roster with a larger prefix and less output it scales the wrong
+way.
+
+The louder symptom was the cache-rate column, where **four seats were not
+measuring the same quantity** - one reporting cached/total, three reporting
+cached/uncached. That column is the tripwire for the 12.5x breakpoint bug
+above, so it being quietly incomparable across vendors mattered more than the
+cent and a half.
+
+Two things had already stated the rule and neither enforced it: the `Usage`
+docstring, and a comment in the sibling function forty lines below the bug
+saying exactly why the subtraction is necessary. **A comment is not a test.**
+There is a test now, and it asserts all four surfaces at once.
+
+While fixing it: the viewer's cache column divided by *all* tokens including
+output, so a seat reading half its prefix from cache displayed 13% purely
+because it thought at length. Output tokens were never cacheable; the
+denominator is input.
+
 ### Resume reset the budget meter
 
 The cap belongs to the match, not to the process running it. A run that crashed
@@ -241,6 +272,37 @@ having them.
 
 ---
 
+## The diplomacy console was lying, not empty
+
+The viewer said "Nobody has spoken" for a match in which all four civs
+negotiated non-aggression pacts, renewed them, and honoured them to the end.
+
+The bundle gathered `message_sent` events and nothing else. But a model that
+wants a pact does not send a message and then propose - it proposes, and puts
+the diplomacy in the proposal's covering note. Of twenty utterances in a
+19-turn match, **seven were invisible**, and they were the load-bearing ones:
+both pact openings and every single acceptance. The replies were worse than
+invisible - the engine never stored them at all, so `respond_to_proposal`'s
+`message` was parsed, validated, and dropped on the floor.
+
+This is a different failure from an empty panel. An empty panel says "I have
+nothing"; this one asserted something false about the match, and did it in the
+one place a reader would go to check.
+
+A frame now tags each utterance `message`, `proposal` or `reply`, and the
+viewer labels the three differently, because they are three different acts:
+talk, talk with binding terms attached, and the answer that signs them or does
+not.
+
+Two adjacent facts, both of which look like bugs and are not:
+
+- **Every message in the match was private. There were no public broadcasts at
+  all.** Not a rendering gap - the models simply never used the public channel.
+- **There was no combat in nineteen turns.** Four civs, mutual pacts, and not
+  one fight, so the combat panel is empty because the match was.
+
+---
+
 ## Viewer bugs, which fail the same way
 
 Both of these drew nothing and said nothing. A panel that throws leaves a
@@ -265,17 +327,25 @@ one thing. Both blocks are their own functions now.
 
 ## Costs
 
-Measured, not estimated. Shakeout roster, 30 turns, four live vendors.
+Measured, not estimated. Shakeout roster, four live vendors. Cache rates are
+cached-over-input, on the corrected accounting above.
 
-| Seat | Model | $/turn | Median latency | Cache read |
-|---|---|---|---|---|
-| p1 | `claude-haiku-4-5` | $0.0127 | 19s | 52% |
-| p2 | `gpt-5.4-mini` | $0.0269 | 82s | 28% |
-| p3 | `gemini-3.6-flash` | $0.0030 | 25s | 0% |
-| p4 | `grok-4.3` | $0.0012 | 6s | 14% |
+| Seat | Model | $/turn | Median latency | Cache read | Output tokens |
+|---|---|---|---|---|---|
+| p1 | `claude-haiku-4-5` | $0.0133 | 18s | 56% | 30k |
+| p2 | `gpt-5.4-mini` | $0.0344 | 109s | 49% | 293k |
+| p3 | `gemini-3.6-flash` | $0.0037 | 24s | 0% | 16k |
+| p4 | `grok-4.3` | $0.0016 | 10s | 9% | 11k |
 
-**$0.044 per turn for the whole table.** 300 turns extrapolates to ~$13 on this
-roster. Flagship models are several times that and still sit inside the $75 cap.
+**$0.053 per turn for the whole table**, over a 19-turn run. 300 turns
+extrapolates to ~$16 on this roster. Flagship models are several times that and
+still sit inside the $75 cap.
+
+**One seat is 65% of the bill and ten times the latency of another.**
+`gpt-5.4-mini` produced 293k output tokens against grok's 11k - twenty-six
+times as many - for a middling score. Turns resolve simultaneously, so it also
+sets the wall clock for everyone. Whether that thinking buys anything is the
+question this lab exists to answer, and it is now measurable per seat.
 
 Two things that matter more than the totals:
 
