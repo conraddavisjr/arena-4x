@@ -61,6 +61,10 @@ RESEARCH_SET = "research_set"
 
 MESSAGE_SENT = "message_sent"
 PROPOSAL_MADE = "proposal_made"
+# The prose a civ attaches to its answer. Separate from `treaty_signed` and
+# `proposal_rejected`, which say what the engine did: those are the outcome,
+# this is what the civ said about it, and only one of the two is negotiation.
+PROPOSAL_ANSWERED = "proposal_answered"
 PROPOSAL_REJECTED = "proposal_rejected"
 PROPOSAL_EXPIRED = "proposal_expired"
 PROPOSAL_FAILED = "proposal_failed"

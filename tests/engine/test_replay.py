@@ -261,6 +261,77 @@ def test_folding_dossier_deltas_reproduces_what_each_agent_wrote(bundle) -> None
     assert folded == truth
 
 
+def test_a_whole_negotiation_reaches_the_frame_not_just_chat() -> None:
+    """A proposal's covering note and its reply are things a civ *said*.
+
+    They were not in the bundle, because `_messages` gathered `message_sent`
+    alone - and models put almost all of their diplomacy in a proposal's
+    `message` rather than beside it in a separate send. The result was a match
+    whose civs signed non-aggression pacts every few turns rendering in the
+    viewer as "Nobody has spoken", which is not a missing feature but a
+    positive falsehood about what happened.
+    """
+    from arena_replay.bundle import _messages
+
+    from arena_engine.actions import Action, Propose, RespondToProposal, pass_turn
+    from arena_engine.types import ProposalType, Terms
+
+    state, _ = new_match("t", 4, ROSTER, MatchConfig(turn_limit=45))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p1"] = Action(
+        diplomacy=[
+            Propose(
+                action="propose",
+                to="p2",
+                type=ProposalType.NON_AGGRESSION,
+                terms=Terms(duration_turns=10),
+                message="Greetings gemini-3.6-flash. Let us keep the frontier quiet.",
+            )
+        ]
+    )
+    state, events = step(state, actions)
+    said = _messages(state, events)
+    assert [m["kind"] for m in said] == ["proposal"]
+    assert said[0]["text"].startswith("Greetings")
+    assert said[0]["to"] == "p2", "a proposal is addressed, so it threads like a DM"
+    assert said[0]["channel"] == "private"
+
+    pid = next(iter(state.proposals))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p2"] = Action(
+        diplomacy=[
+            RespondToProposal(
+                action="respond_to_proposal",
+                proposal_id=pid,
+                response="accept",
+                message="Accepted. Let us both expand westward in peace.",
+            )
+        ]
+    )
+    state, events = step(state, actions)
+    reply = [m for m in _messages(state, events) if m["kind"] == "reply"]
+    assert len(reply) == 1, "the answer is the other half of the exchange"
+    assert reply[0]["response"] == "accept", "the same words follow a yes and a no"
+    assert reply[0]["to"] == "p1"
+    assert any(e.type == "treaty_signed" for e in events), "the outcome still fires separately"
+
+
+def test_a_silent_proposal_adds_nothing_to_the_thread() -> None:
+    """No note attached means nothing was said. An empty bubble is worse than none."""
+    from arena_replay.bundle import _messages
+
+    from arena_engine.actions import Action, Propose, pass_turn
+    from arena_engine.types import ProposalType, Terms
+
+    state, _ = new_match("t", 4, ROSTER, MatchConfig(turn_limit=45))
+    actions = {p: pass_turn() for p, _ in ROSTER}
+    actions["p1"] = Action(
+        diplomacy=[Propose(action="propose", to="p2", type=ProposalType.PEACE, terms=Terms())]
+    )
+    state, events = step(state, actions)
+    assert _messages(state, events) == []
+
+
 def test_an_unchanged_dossier_is_not_repeated(bundle) -> None:
     """Four dossiers at ~2000 tokens each, repeated on 300 frames, would dominate
     the bundle - and most turns an agent changes one line or none."""

@@ -154,6 +154,11 @@
     padding:1px 4px;margin-right:4px;font-weight:600}
   .chan.private{color:#f472b6;border:1px solid #5c2444}
   .chan.public{color:#4ade80;border:1px solid #245c38}
+  /* A proposal carries binding terms and a reply either signs them or does not,
+     so those two get their own colours rather than reading as more chat. */
+  .chan.proposal{color:#c084fc;border:1px solid #4a2a6b}
+  .chan.reply.accept{color:#4ade80;border:1px solid #245c38}
+  .chan.reply.reject{color:#f87171;border:1px solid #6b2626}
   .msg .meta .dot{width:8px;height:8px;display:inline-block;vertical-align:middle;
     margin-right:3px}
   .msg{cursor:pointer}
@@ -979,9 +984,18 @@ async function drawDiplomacy(relationLines) {
   // exists to answer: what did they know, and when.
   const upToNow = (threads.get(S.thread) || []).filter((m) => m.turn <= S.turn);
   const body = upToNow.length ? upToNow.map((m) => {
-    return `<div class="msg ${m.channel} ${m.turn===S.turn?"now":""}" data-turn="${m.turn}">
+    // Three things arrive in a thread and they are not the same act. A message
+    // is talk; a proposal is talk with a binding offer attached; a reply either
+    // signs it or does not. Labelling all three "private" hid the only part
+    // that changes the board.
+    const tag = m.kind === "proposal" ? `proposes ${esc(m.type || "terms")}`
+      : m.kind === "reply" ? (m.response === "accept" ? "accepts" : "declines")
+      : null;
+    return `<div class="msg ${m.channel} ${m.kind || "message"} ${
+      m.turn===S.turn?"now":""}" data-turn="${m.turn}">
       <div class="meta"><span class="chan ${m.channel}">${
-        m.channel === "private" ? "private" : "public"}</span> turn ${m.turn} ·
+        m.channel === "private" ? "private" : "public"}</span>${
+        tag ? ` <span class="chan ${m.kind} ${m.response||""}">${tag}</span>` : ""} turn ${m.turn} ·
         <span class="dot" style="background:${cssOf(m.from)}"></span>${nameOf(m.from)}${
         m.to ? ` → <span class="dot" style="background:${cssOf(m.to)}"></span>${nameOf(m.to)}`
              : " · to everyone"}</div>${esc(m.text)}

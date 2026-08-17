@@ -276,6 +276,17 @@ def _reasoning(events: list[Event]) -> dict[str, Any]:
     return out
 
 
+# What counts as something a civ *said*. A proposal's covering note and the
+# reply to it are negotiation in exactly the way a DM is, and gathering only
+# `message_sent` was why a match full of pacts read as "Nobody has spoken":
+# models put their diplomacy in the proposal, not beside it.
+SPOKEN = {
+    "message_sent": "message",
+    "proposal_made": "proposal",
+    "proposal_answered": "reply",
+}
+
+
 def _messages(state: State, events: list[Event]) -> list[dict[str, Any]]:
     """Everything said this turn, public and private.
 
@@ -288,13 +299,21 @@ def _messages(state: State, events: list[Event]) -> list[dict[str, Any]]:
         {
             "from": e.actor,
             "to": e.payload.get("to"),
-            "channel": e.payload.get("channel", "public"),
+            # A proposal and its reply are addressed to one civ by construction,
+            # so they are private whatever the payload says. Only `send_message`
+            # can be a broadcast.
+            "channel": e.payload.get("channel", "private" if kind != "message" else "public"),
+            "kind": kind,
             # The message body is in the payload; `e.text` is the ticker line
             # ("Aurelian Compact sent a private message"), not the content.
             "text": e.payload.get("text", ""),
+            # Only on a reply, and it is the half that carries the meaning: the
+            # same words follow an acceptance and a refusal.
+            **({"response": e.payload["response"]} if "response" in e.payload else {}),
+            **({"type": e.payload["type"]} if kind == "proposal" else {}),
         }
         for e in events
-        if e.type == "message_sent"
+        if (kind := SPOKEN.get(e.type)) and e.payload.get("text")
     ]
 
 

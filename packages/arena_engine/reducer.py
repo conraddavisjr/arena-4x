@@ -555,6 +555,14 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                         proposal_id=p.id,
                         to=item.to,
                         type=item.type.value,
+                        # The covering note, carried so the replay can show it.
+                        # Without this the negotiation is invisible: models put
+                        # most of their diplomacy in a proposal's `message`
+                        # rather than in a separate `send_message`, and the
+                        # bundle only ever gathered `message_sent`. A match
+                        # whose four civs signed pacts every few turns rendered
+                        # as "Nobody has spoken."
+                        text=item.message or "",
                     )
                 )
             case "respond_to_proposal":
@@ -575,6 +583,25 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                 )
                 for e in results:
                     out.append(ev.event(s.turn, e.kind, e.detail, actor=e.actor, other=e.other))
+                # Emitted after the outcome, and only when the civ actually
+                # wrote something. The reply is the other half of the exchange -
+                # "accepted, let us keep the western frontier quiet" is the
+                # answer to a greeting, and a thread showing one without the
+                # other is not a conversation.
+                if item.message:
+                    out.append(
+                        ev.event(
+                            s.turn,
+                            ev.PROPOSAL_ANSWERED,
+                            f"{s.players[player_id].civ_name} answered "
+                            f"{s.players[proposal.from_player].civ_name}",
+                            actor=player_id,
+                            proposal_id=proposal.id,
+                            to=proposal.from_player,
+                            response=item.response,
+                            text=item.message,
+                        )
+                    )
             case "declare_war":
                 if item.on not in s.players or item.on == player_id or s.is_neutral(item.on):
                     _reject(s, out, player_id, "declare_war", f"cannot declare war on {item.on!r}")
