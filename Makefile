@@ -10,7 +10,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export library
+.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export library prices
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -61,6 +61,13 @@ fmt:  ## Fix what can be fixed automatically
 run:  ## Play a match through the orchestrator. make run ROSTER=dry SEED=4
 	$(PY) scripts/run_match.py --roster $(or $(ROSTER),dry) --seed $(or $(SEED),4) \
 		$(if $(TURNS),--turns $(TURNS),)
+
+prices:  ## Print the rate card with its provenance, for re-checking against vendors
+	@$(PY) -c "import sys; sys.path.insert(0,'packages'); \
+from arena_orchestrator.pricing import RATES, STALE_AFTER_DAYS; \
+[print(f'{m:26} {r.input:6.2f} in {r.output:7.2f} out  {r.age_days:3}d old  {r.source}') \
+ for m, r in RATES.items()]; \
+print(); print(f'stale after {STALE_AFTER_DAYS} days. Update the rate AND its checked date.')"
 
 contracts:  ## Live provider contract tests. Spends money; skips without keys
 	@echo "These hit the real vendors. Each is a few cents; run before a flagship run."
