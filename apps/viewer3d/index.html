@@ -125,6 +125,22 @@
     padding:7px 9px;font-size:11px;line-height:1.45;color:var(--ink);
     box-shadow:0 6px 20px #000a}
   #tip.on{display:block}
+  /* The view menu. Anchored to its button rather than to the header, so it
+     stays put when the status text beside it grows a victory line. */
+  .menu{position:relative}
+  .caret{color:var(--faint)}
+  #viewMenu{position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:210px;
+    background:#0d1117;border:1px solid #33404f;border-radius:8px;padding:5px;
+    box-shadow:0 10px 28px #000b}
+  #viewMenu .group{font-size:9px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--faint);padding:6px 8px 3px}
+  #viewMenu button{display:flex;align-items:center;gap:7px;width:100%;text-align:left;
+    border:0;background:none;padding:6px 8px;border-radius:5px;font-size:12px}
+  #viewMenu button:hover{background:#182028}
+  #viewMenu button[aria-checked="true"]{background:#1b2836;color:#cfe0ff}
+  /* A tick rather than a highlight alone, so the current view survives being
+     read at a glance or in a screenshot. */
+  #viewMenu button[aria-checked="true"]::after{content:"✓";margin-left:auto;color:#4ade80}
   .civ{display:flex;align-items:center;gap:6px}
   .dot{width:9px;height:9px;border-radius:50%;flex:none}
   .dead{opacity:.4;text-decoration:line-through}
@@ -218,9 +234,15 @@
   <div id="stage">
     <header>
       <h1>ARENA-4X</h1>
-      <div id="modes" style="display:flex;gap:2px"></div>
+      <!-- One menu for what you are looking at, and Play left outside it,
+           because Play is the control you reach for repeatedly while the view
+           is something you set and forget. -->
+      <div class="menu">
+        <button id="viewBtn" aria-haspopup="true" aria-expanded="false">
+          <span id="viewNow">All empires</span> <span class="caret">▾</span></button>
+        <div id="viewMenu" role="menu" hidden></div>
+      </div>
       <button id="play">▶ Play</button>
-      <button id="top">Top-down</button>
       <span class="turn" id="status"></span>
     </header>
     <div class="hint">drag to orbit · scroll to zoom · right-drag to pan</div>
@@ -305,6 +327,12 @@ controls.dampingFactor = 0.08;
 controls.maxPolarAngle = Math.PI * 0.47;
 controls.minDistance = 6;
 controls.maxDistance = 220;
+// Zoom towards whatever is under the pointer, not towards the orbit target.
+// On a board this wide the difference is most of the usability: centre-zooming
+// means picking a corner of the map, zooming in on the middle, then panning
+// back out to where you were looking - every time. With this, pointing at a
+// city and scrolling arrives at that city.
+controls.zoomToCursor = true;
 
 scene.add(new THREE.HemisphereLight(0xbcd7ff, 0x2b2418, 1.5));
 const sun = new THREE.DirectionalLight(0xfff2d8, 2.1);
@@ -1268,28 +1296,79 @@ function tooltips(root) {
   // it is tall, then back off a little so the board is not flush to the frame.
   const vFov = (camera.fov * Math.PI) / 180;
   const fit = extent / (2 * Math.tan(vFov / 2) * Math.min(1, camera.aspect)) * 1.15;
-  S.home = { target: new THREE.Vector3(cx, 0, cz), dist: fit };
+  // The opening camera, kept so "Reset view" can return to it exactly. Now that
+  // zooming follows the cursor it is very easy to end up somewhere odd, and
+  // "back to how it looked" needs to be one click rather than a hunt.
+  S.home = {
+    target: new THREE.Vector3(cx, 0, cz),
+    dist: fit,
+    eye: new THREE.Vector3(cx, fit * 0.72, cz + fit * 0.66),
+  };
   controls.target.copy(S.home.target);
-  camera.position.set(cx, fit * 0.72, cz + fit * 0.66);
+  camera.position.copy(S.home.eye);
   scene.fog.near = fit * 0.9;
   scene.fog.far = fit * 2.4;
 
-  $("modes").innerHTML = [["god","God"], ...S.match.civs.map((c)=>[`agent:${c.player_id}`, c.model || c.civ_name.split(" ")[0]])]
-    .map(([k,label]) => `<button data-mode="${k}" aria-pressed="${k==="god"}">${label}</button>`).join("");
-  $("modes").onclick = (e) => {
-    const b = e.target.closest("button"); if (!b) return;
+  // "All empires", not "God". The mode means the same thing - no fog, ground
+  // truth, every civ at once - and the old label was a word this project would
+  // rather not put on a page it publishes. It also described the *viewer*
+  // rather than the view; the civ options beside it name what you are looking
+  // through, so this one names it too.
+  const ALL = "All empires";
+  const dot = (c) => `<span class="dot" style="background:${CSS[c.colour]}"></span>`;
+  $("viewMenu").innerHTML = `
+    <div class="group">Fog of war</div>
+    <button role="menuitemradio" data-mode="god" data-label="${ALL}"
+      aria-checked="true">${ALL}</button>
+    ${S.match.civs.map((c) => `<button role="menuitemradio" data-mode="agent:${c.player_id}"
+      data-label="${esc(c.model || c.civ_name)}" aria-checked="false">${dot(c)}${
+      esc(c.model || c.civ_name)}</button>`).join("")}
+    <div class="group">Camera</div>
+    <button role="menuitem" data-camera="top">Top-down</button>
+    <button role="menuitem" data-camera="home">Reset view</button>`;
+
+  const closeMenu = () => {
+    $("viewMenu").hidden = true;
+    $("viewBtn").setAttribute("aria-expanded", "false");
+  };
+  $("viewBtn").onclick = (e) => {
+    e.stopPropagation();
+    const open = $("viewMenu").hidden;
+    $("viewMenu").hidden = !open;
+    $("viewBtn").setAttribute("aria-expanded", String(open));
+  };
+  // Dismissed by clicking anywhere else or by Escape. Both, because a menu that
+  // can only be closed by the button that opened it is a trap on a page whose
+  // main surface is a canvas you drag.
+  addEventListener("click", closeMenu);
+  addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+
+  $("viewMenu").onclick = (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.camera) {
+      controls.target.copy(S.home.target);
+      if (b.dataset.camera === "top") {
+        camera.position.set(S.home.target.x, S.home.dist * 1.05, S.home.target.z + 0.01);
+      } else {
+        camera.position.copy(S.home.eye);
+      }
+      controls.update();
+      closeMenu();
+      return;
+    }
     const [mode, who] = b.dataset.mode.split(":");
-    S.mode = mode; S.focus = who || null;
-    for (const x of $("modes").children) x.setAttribute("aria-pressed", x === b);
+    S.mode = mode;
+    S.focus = who || null;
+    for (const x of $("viewMenu").querySelectorAll("[data-mode]")) {
+      x.setAttribute("aria-checked", String(x === b));
+    }
+    $("viewNow").textContent = b.dataset.label;
+    closeMenu();
     // The panels are fog-aware now, so a mode change has to redraw them too.
     S.expanded = S.focus;
     drawTurn();
     panels();
-  };
-  $("top").onclick = () => {
-    controls.target.copy(S.home.target);
-    camera.position.set(S.home.target.x, S.home.dist * 1.05, S.home.target.z + 0.01);
-    controls.update();
   };
   tooltips(document.querySelector("aside"));
   $("slider").max = S.match.turns;
