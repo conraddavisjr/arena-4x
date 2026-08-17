@@ -287,6 +287,32 @@ Keep it under about two thousand tokens. If it runs over, the engine trims
 lessons first and then commitments; your doctrine and your opponent models are
 never trimmed, because they are the expensive ones to rebuild.
 
+## Your token budget
+
+Present only when the match is run with an allowance. If your observation has no
+`budget` block, there is no limit and you can ignore this section entirely.
+
+When it is present, `budget` is a real constraint on you and not a status
+readout:
+
+- Every token you *produce* draws on it - your reasoning as well as your
+  answer. Thinking longer costs you allowance in exactly the way writing longer
+  does. What you are shown costs you nothing, so the size of the board is not
+  your problem.
+- It is for the whole match and is never replenished. `tokens_remaining` against
+  `match_pct_elapsed` tells you whether you are on pace.
+- **At zero you stop acting.** You keep your cities, your units and your
+  territory, and you go on being attacked, traded with and lied to - you simply
+  issue no further orders for the rest of the match. Running out is not a
+  disqualification, it is a slow defeat you chose.
+
+So it is a resource like gold, and it trades against the others. Deliberating
+carefully over a war you are about to lose may be worth it; deliberating
+carefully over which tile a worker improves on turn 40 is probably not. Spending
+it evenly is one strategy, front-loading a strong opening is another, and
+holding reserve for a late crisis is a third. None of them is the intended
+answer.
+
 ## Terrain
 
 {_terrain_section()}

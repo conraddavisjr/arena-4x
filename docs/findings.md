@@ -202,6 +202,77 @@ Even so it cannot discriminate the two placements through the streaming path -
 three attempts failed - so placement is guarded by an offline assertion on the
 request shape and by a runtime `cache_miss` journal record instead.
 
+### The rate card was wrong for eight of ten entries, and said so
+
+Every match reported roughly **half** its true cost. `llm-run-2` was billed as
+$1.18 and actually cost $2.36. Which means the $75 safety halt - the one number
+the whole budget system exists to enforce - was in practice a $150 halt.
+
+| model | card | vendor |
+|---|---|---|
+| `grok-4.3` | 0.20 / 0.50 | **1.25 / 2.50** |
+| `gpt-5.6` | 1.25 / 10.00 | **5.00 / 30.00** |
+| `gpt-5.4-mini` | 0.25 / 2.00 | **0.75 / 4.50** |
+| `gemini-3.6-flash` | 0.30 / 2.50 | **0.75 / 3.75** |
+| `gemini-3.5-flash-lite` | 0.10 / 0.40 | **0.30 / 2.50** |
+| `claude-sonnet-5` | 3.00 / 15.00 | **2.00 / 10.00** |
+
+**The file predicted this exactly.** It carried a comment saying most of its
+rates were the figures the roster was costed against and "should be re-checked
+before a flagship run". That was accurate, and it was ignored - by me, while
+quoting the numbers to two decimal places in a roster recommendation built on
+them. A warning that names its own failure mode is not a control.
+
+So provenance is per entry now: each rate cites the vendor URL it came from and
+the date it was read, `make prices` prints the card for re-checking, and the
+suite fails once any entry passes 90 days. The two entries the old card got
+right were exactly the two its comment vouched for, which is the whole argument
+for the change.
+
+`rebuild_bundle` also stopped trusting the stored dollar figure. Tokens are a
+measurement and cannot go stale; money is derived. Correcting a rate now
+reprices history by rebuilding, instead of carrying the error into an artifact
+somebody reads later.
+
+**Two things worth knowing beyond the numbers.** Sonnet 5 was wrong by being too
+*high* - its introductory pricing was made permanent - so rates rot in both
+directions. And Claude 4.7+ models use a tokenizer producing ~30% more tokens
+for the same text, which means per-token price comparisons understate them by
+about a third. No sticker-price table settles a cost question; only measured
+spend does.
+
+*Postscript on how this surfaced.* Another model challenged the table and was
+right that it was wrong, and right on three of four prices - while being wrong
+about the cause (it argued a decimal shift; the arithmetic was correct on stale
+inputs) and wrong about its own vendor's model, quoting flash-lite at
+$0.54/$4.50 against a real $0.30/$2.50. Both of us were confidently wrong about
+something. The vendor pages settled it in four fetches.
+
+### Turning on thinking shrinks the grammar budget
+
+The third distinct Anthropic schema limit here, and the one that nearly cost a
+seat. `claude-haiku-4-5` rejected the action schema with "compiled grammar is
+too large" whenever extended thinking was enabled - and accepted the identical
+bytes with thinking off.
+
+Bisected live:
+
+| | with thinking |
+|---|---|
+| strict dialect, 5,347B | 400 |
+| loose `orders`, 4,924B | **works** |
+| tiny schema, ~200B | works |
+
+Loosening `orders` costs 423 bytes and buys the whole seat: valid orders and a
+3,072-character reasoning trace where there had been none. `claude-opus-5` takes
+adaptive thinking and the strict schema unchanged, so the dialect is model-aware
+rather than provider-aware and the flagship keeps the stronger guarantee.
+
+This was one measurement away from being resolved the expensive way. The
+alternatives on the table were a reasoning-disabled civ in a four-way comparison
+or swapping in a model at three times the price - and the roster argument had
+already been made on both. **Bisect the limit before redesigning around it.**
+
 ### One seat counted its cached tokens twice
 
 `Usage.input_tokens` is defined as the *uncached* input, because the pricer
@@ -556,6 +627,12 @@ saying which case is which.
    concluding the model is weak. That mistake cost two days.
 4. If a vendor error names something that sounds like a credential or a billing
    problem, verify the model id first.
+4b. `make prices` before quoting any cost. Rates rot in both directions, and a
+   comment saying "these should be re-checked" is not a control - it was there,
+   it was accurate, and the numbers were quoted anyway.
+4c. When a vendor limit blocks a design, **bisect it before redesigning around
+   it**. The grammar ceiling looked like it cost a seat its reasoning; it cost
+   423 bytes.
 5. Stage the viewer against a bot match before a paid one. It costs nothing and
    it is the only way to tell "this match had no diplomacy" from "this panel
    never rendered".
