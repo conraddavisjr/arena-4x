@@ -655,7 +655,12 @@ function panels() {
       <p class="plan clamp">${esc(d.plan||"—")}</p>`;
     return `<div class="card ${open?"open":""}" data-civ="${c.player_id}">
       <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.model || c.civ_name}
-        <span class="meta">${esc(c.civ_name)} · ${open?"▾":"▸"}</span></div>${detail}</div>`;
+        <span class="meta">${
+          // The civ name only earns its space when it says something the label
+          // does not. Since the civs are named after the models, the two are
+          // identical on a live roster and printing both read as a stutter.
+          c.civ_name === (c.model || c.civ_name) ? "" : esc(c.civ_name) + " · "
+        }${open?"▾":"▸"}</span></div>${detail}</div>`;
   }).join("") || `<div class="empty">No reasoning this turn.</div>`;
   $("reasoning").onclick = (ev) => {
     const card = ev.target.closest(".card[data-civ]");
@@ -684,6 +689,59 @@ function panels() {
   drawDiplomacy(rel);
 
 
+  const dossierCount = drawDossier(f);
+
+  // Events are already attributed, so the same rule applies: a civ hears about
+  // what happened to it and what happened in public, not about a rival's
+  // interior life.
+  const audible = (ev) =>
+    S.mode !== "agent" || !S.focus || !ev.actor || ev.actor === S.focus || knows(ev.actor);
+  const shown = (f.events||[]).filter(audible);
+  $("events").innerHTML = shown.map((ev)=>`<div class="tick">${
+    ev.actor?`<b style="color:${cssOf(ev.actor)}">${ev.actor}</b> `:""}${esc(ev.text)}</div>`).join("")
+    || `<div class="empty">Quiet turn.</div>`;
+
+  // What each collapsed section would show, so closing one costs no awareness.
+  // `hot` marks what changed *this* turn - a dossier edit, something said -
+  // because those are the reasons to open a section you had shut. Written last,
+  // where every value it reads already exists: an earlier attempt sat above the
+  // panels it counted and threw a temporal-dead-zone error on every render,
+  // which the page survived by simply never drawing the sections below it.
+  const saidNow = (f.messages || []).filter(
+    (m) => S.mode !== "agent" || !S.focus || m.channel !== "private"
+      || m.from === S.focus || m.to === S.focus
+  ).length;
+  badge("economy", S.match.civs.length);
+  badge("cost", Object.keys(S.spend || {}).length);
+  badge("reasoning", thinkers.length);
+  badge("dossier", dossierCount.label, dossierCount.hot);
+  badge("messages", saidNow, saidNow > 0);
+  badge("events", shown.length);
+  drawSignals();
+}
+
+/**
+ * The at-a-glance read: where each civ is pointed, and what is being done to it.
+ *
+ * The raw panels above answer "what happened this turn" well and "is anyone in
+ * trouble" badly - that question is cumulative and comparative, and reading it
+ * out of thirty turns of prose is not realistic. Everything here is derived
+ * from data the bundle already carries and folded to the current turn.
+ */
+/**
+ * The dossier panel.
+ *
+ * Extracted from `panels` for one specific reason: the "all" view returns
+ * early, and while this lived inline that `return` took the whole of `panels`
+ * with it - so with the default picker selected, Events, Signals and every
+ * count badge rendered nothing at all. No error, no console warning, just
+ * three sections that were never drawn; the same shape as the
+ * temporal-dead-zone bug noted further down. A `return` is only safe in a
+ * function that does one thing, so now it is one.
+ *
+ * Returns what the badge needs, which is all the caller still wants from here.
+ */
+function drawDossier(f) {
   // The dossier: the agent's own memory, returned to it verbatim every turn.
   // Arguably the single most interesting artifact the lab produces, and until
   // now it was in the bundle and on no screen. Shown for one civ at a time -
@@ -735,7 +793,11 @@ function panels() {
           ${(d.lessons || []).length} lessons</p>`}</div>`;
     }).join("");
     $("dossier").onclick = dossierPick;
-    return;
+    // How many civs revised their notes this turn - the reason to open a
+    // section you had shut, and the only summary that means anything when
+    // four dossiers are on screen at once.
+    const edits = S.match.civs.filter((c) => (f.dossiers || {})[c.player_id]).length;
+    return { label: edits ? `${edits} edited` : S.match.civs.length, hot: edits > 0 };
   }
   $("dossier").innerHTML = picker + (!doc ? `<div class="empty">Nothing written yet.</div>` : note + `
     <div class="who"><span class="dot" style="background:${cssOf(who)}"></span>${nameOf(who)}
@@ -759,44 +821,9 @@ function panels() {
     ${(doc.lessons || []).length ? `<p><b>Lessons.</b></p>
       <ul>${list(doc.lessons, was?.lessons)}</ul>` : ""}`);
   $("dossier").onclick = dossierPick;
-
-  // Events are already attributed, so the same rule applies: a civ hears about
-  // what happened to it and what happened in public, not about a rival's
-  // interior life.
-  const audible = (ev) =>
-    S.mode !== "agent" || !S.focus || !ev.actor || ev.actor === S.focus || knows(ev.actor);
-  const shown = (f.events||[]).filter(audible);
-  $("events").innerHTML = shown.map((ev)=>`<div class="tick">${
-    ev.actor?`<b style="color:${cssOf(ev.actor)}">${ev.actor}</b> `:""}${esc(ev.text)}</div>`).join("")
-    || `<div class="empty">Quiet turn.</div>`;
-
-  // What each collapsed section would show, so closing one costs no awareness.
-  // `hot` marks what changed *this* turn - a dossier edit, something said -
-  // because those are the reasons to open a section you had shut. Written last,
-  // where every value it reads already exists: an earlier attempt sat above the
-  // panels it counted and threw a temporal-dead-zone error on every render,
-  // which the page survived by simply never drawing the sections below it.
-  const saidNow = (f.messages || []).filter(
-    (m) => S.mode !== "agent" || !S.focus || m.channel !== "private"
-      || m.from === S.focus || m.to === S.focus
-  ).length;
-  badge("economy", S.match.civs.length);
-  badge("cost", Object.keys(S.spend || {}).length);
-  badge("reasoning", thinkers.length);
-  badge("dossier", doc ? (edited ? "edited" : "1") : 0, edited);
-  badge("messages", saidNow, saidNow > 0);
-  badge("events", shown.length);
-  drawSignals();
+  return { label: doc ? (edited ? "edited" : "1") : 0, hot: edited };
 }
 
-/**
- * The at-a-glance read: where each civ is pointed, and what is being done to it.
- *
- * The raw panels above answer "what happened this turn" well and "is anyone in
- * trouble" badly - that question is cumulative and comparative, and reading it
- * out of thirty turns of prose is not realistic. Everything here is derived
- * from data the bundle already carries and folded to the current turn.
- */
 function drawSignals() {
   const f = S.frame;
   const rows = S.match.civs.map((c) => {
