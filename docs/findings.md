@@ -285,6 +285,67 @@ outage must not end a match, and an exhausted account must.
 failed it on an account that was fine - the check was less resilient than the
 thing it checked. It uses the same retry ladder now.
 
+### Trading order enforcement for reasoning eliminated a civilisation
+
+The most expensive mistake in the project, and it was mine, in a change I made
+with the risk written into the comment beside it.
+
+`claude-haiku-4-5` cannot have both extended thinking and the strict action
+schema. I resolved that by loosening `orders` so only `action` was required and
+demoting the field requirements to prose. The next 128-turn match:
+
+| seat | orders sent | malformed | dropped |
+|---|---|---|---|
+| `claude-haiku-4-5` | 116 | 106 | **91%** |
+| `gpt-5.4-mini` | 1037 | 0 | 0% |
+| `gemini-3.6-flash` | 1636 | 5 | 0% |
+| `grok-4.3` | 5570 | 0 | 0% |
+
+It answered `{"action": "found_city"}` with no unit and no name, over and over,
+across every order type - 35 malformed `move_unit`, 20 `found_city`, 17
+`set_research`. Those entries are unusable, so `actions.parse` drops them. It
+could not found cities, lost the one it had, **and was eliminated on turn 35**,
+leaving a three-way match for the remaining 93 turns.
+
+The prose was present and correct - `found_city requires name, unit_id` - and
+the model ignored it 91% of the time. **Structured output works because the
+decoder enforces the shape.** A description is a suggestion.
+
+I shipped it on one live probe that happened to return well-formed orders,
+without measuring the rate. `dialects.py` already said, in a comment I wrote
+while making the change, that a loose union "lets a model answer
+`{"action": "found_city"}` with no unit and no name - measured, repeatedly".
+
+**The fix is to give up the other thing.** Pre-4.6 Anthropic keeps the strict
+schema and does without extended thinking: 0 malformed across three live calls,
+against 91%. A seat that reasons but cannot act is worth nothing; a seat that
+acts without a visible trace is worth a great deal.
+
+### The grammar ceiling is total complexity, not bytes
+
+Worth recording because it rules out the obvious fixes. Chasing a way to keep
+both, measured live against `claude-haiku-4-5` with thinking on:
+
+| schema | bytes | union-typed params | |
+|---|---|---|---|
+| strict | 4,136 | 10 | rejected |
+| strict, 3 fields removed | 3,950 | 7 | rejected |
+| strict, 6 fields removed | 3,802 | 4 | **accepted** |
+| one array per action type | 5,199 | 0 | rejected |
+| loose orders | 4,924 | 0 in orders | **accepted** |
+
+So shrinking bytes does not help - `{"type": ["string","null"]}` is still a
+union - and eliminating unions does not help either if the structure grows to
+compensate. The ceiling is the compiled grammar's total size, and no
+reformulation found gets the strict schema under it with thinking enabled.
+
+Two byte savings were kept anyway, because they are free headroom for every
+Anthropic seat: **830 bytes of `title`** that Pydantic emits and a grammar never
+reads, and the compact nullable encoding at 19 bytes a field. Together 1,211
+bytes, from 5,347 down to 4,136. Neither solves the ceiling; both were always
+removable and nobody had looked, because the schema had been small enough for
+every model that mattered at the time.
+
 ### Turning on thinking shrinks the grammar budget
 
 The third distinct Anthropic schema limit here, and the one that nearly cost a
@@ -670,6 +731,10 @@ saying which case is which.
 4c. When a vendor limit blocks a design, **bisect it before redesigning around
    it**. The grammar ceiling looked like it cost a seat its reasoning; it cost
    423 bytes.
+4c-bis. **Never trade schema enforcement for anything.** It is the only thing
+   standing between a model and an unusable order, and the failure is silent -
+   dropped orders look exactly like a model choosing to do nothing. Measure the
+   malformed rate over a real match before believing a looser schema is safe.
 4d. `make preflight` before anything unattended. A key that exists is not a key
    that can pay, and the gap between those two facts cost six hours.
 5. Stage the viewer against a bot match before a paid one. It costs nothing and

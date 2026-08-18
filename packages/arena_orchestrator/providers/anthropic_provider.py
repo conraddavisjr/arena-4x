@@ -34,6 +34,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from ..dialects import cannot_think_with_schema
 from .base import (
     THINKING_BUDGET,
     FatalProviderError,
@@ -144,11 +145,17 @@ class AnthropicClient:
         if self._supports_adaptive:
             thinking = {"type": "adaptive"}
             output_config["effort"] = self._effort
-        else:
+        elif not cannot_think_with_schema(self.model):
             thinking = {"type": "enabled", "budget_tokens": THINKING_BUDGET[self._effort]}
-        if self._thinking_display:
-            thinking["display"] = self._thinking_display
-        request["thinking"] = thinking
+        # Otherwise: no thinking at all. Enabling it on these models shrinks the
+        # compiled-grammar budget below what the strict action schema needs, and
+        # the schema is the thing that stops the model omitting the fields an
+        # order requires. Losing the trace costs visibility; losing enforcement
+        # cost a civilisation on turn 35. See dialects.NO_THINKING_BELOW.
+        if thinking:
+            if self._thinking_display:
+                thinking["display"] = self._thinking_display
+            request["thinking"] = thinking
 
         started = time.monotonic()
         try:

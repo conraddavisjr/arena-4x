@@ -51,48 +51,105 @@ NEEDS_FLATTENING = frozenset({"anthropic"})
 STRICT = ("orders",)
 LOOSE = ("diplomacy",)
 
-# Models whose grammar budget shrinks once extended thinking is on, and which
-# therefore cannot take the strict variant at all.
+# Extended thinking shrinks the compiled-grammar budget far enough that the
+# strict `orders` variant no longer fits on pre-4.6 models. That is a real
+# constraint and the question is only what to give up for it.
 #
-# This is the third distinct Anthropic schema limit this project has run into,
-# and the least obvious: **turning thinking on costs grammar headroom.** The
-# strict dialect is 5,347 bytes and 400s with thinking enabled on
-# `claude-haiku-4-5`; the same request without thinking is fine, and a 4,206-byte
-# schema with thinking is fine. Loosening `orders` costs 423 bytes and takes it
-# to 4,924, which is accepted - measured live, returning valid orders and a real
-# reasoning trace.
+# **We gave up the wrong thing once, and it cost a match.** Loosening `orders`
+# so only `action` is required made the schema fit, and `claude-haiku-4-5` then
+# answered `{"action": "found_city"}` with no unit and no name - 91% of its
+# orders malformed against 0% on every other seat, because it was the only seat
+# whose schema had stopped enforcing them. It could not found cities, lost the
+# one it had, and was eliminated on turn 35 of a 128-turn match. The prose
+# instruction was present and correct and the model ignored it.
 #
-# It applies to pre-4.6 models because those take a `budget_tokens` thinking
-# block rather than adaptive thinking. Verified the other way too: `claude-opus-5`
-# with adaptive thinking accepts the strict schema unchanged, so the flagship
-# roster keeps the stronger guarantee and only the seat that cannot have it gives
-# it up.
+# So the trade runs the other way now: pre-4.6 Anthropic keeps the strict schema
+# and does without extended thinking. A seat that reasons but cannot act is
+# worth nothing; a seat that acts without a visible trace is worth a great deal.
+# `providers.anthropic_provider` reads this to decide.
 #
-# The cost is real and is the reason the asymmetry above exists at all: a
-# loosely-flattened `orders` lets a model answer `{"action": "found_city"}` with
-# no unit, which wastes that order. `actions.parse` drops such an entry and lets
-# the rest of the turn through, and the merged description spells out what each
-# action requires. That is a worse guarantee than the strict variant and a much
-# better one than a seat that cannot reason at all - which was the alternative,
-# and which would have meant either a reasoning-disabled civ in a four-way
-# comparison or paying three times the price for a different model.
-LOOSE_ORDERS_BELOW = ("claude-haiku-", "claude-sonnet-4-", "claude-opus-4-5")
+# Measured while looking for a third option, and worth recording because it
+# rules out the obvious ones. The binding constraint is total grammar
+# complexity, not any single dimension:
+#
+#     strict, 4136B, 10 union-typed params  -> rejected
+#     strict, 3950B,  7 union-typed params  -> rejected
+#     strict, 3802B,  4 union-typed params  -> accepted
+#     one array per action, 5199B, 0 unions -> rejected
+#     loose orders, 4924B                   -> accepted
+#
+# Shrinking bytes does not help - `{"type": ["string","null"]}` is still a union
+# - and removing unions does not help either if the structure grows instead.
+NO_THINKING_BELOW = ("claude-haiku-", "claude-sonnet-4-", "claude-opus-4-5")
 
 
-def needs_loose_orders(provider: str, model: str | None) -> bool:
-    return provider == "anthropic" and bool(model) and model.startswith(LOOSE_ORDERS_BELOW)
+def cannot_think_with_schema(model: str | None) -> bool:
+    return bool(model) and model.startswith(NO_THINKING_BELOW)
 
 
 def for_provider(schema: dict[str, Any], provider: str, model: str | None = None) -> dict[str, Any]:
     """The action schema as this vendor, running this model, will accept it."""
     if provider not in NEEDS_FLATTENING:
         return schema
-    strict = () if needs_loose_orders(provider, model) else STRICT
-    loose = ("orders", *LOOSE) if not strict else LOOSE
     # Descriptions come off *before* flattening, not after: the merge writes a
     # description of its own spelling out which fields each action needs, and
     # that one is load-bearing. Stripping last would have removed it.
-    return prune(flatten_unions(strip_descriptions(schema), strict=strict, loose=loose))
+    lean = strip_titles(strip_descriptions(schema))
+    return prune(flatten_unions(lean, strict=STRICT, loose=LOOSE))
+
+
+def nullable(spec: dict[str, Any]) -> dict[str, Any]:
+    """Make one field accept null, in the fewest bytes that express it.
+
+    Every byte here is compiled into a grammar against a hard ceiling, and the
+    obvious encoding is the expensive one:
+
+        {"anyOf": [{"type": "string"}, {"type": "null"}]}   47 bytes
+        {"type": ["string", "null"]}                        28 bytes
+
+    Nineteen bytes a field does not sound like an argument until you are 423
+    bytes over the limit with eleven fields to spend them on. An enum collapses
+    further still - `null` joins the member list rather than wrapping the whole
+    node.
+
+    Falls back to the wrapper for anything it cannot compact - a `$ref`, an
+    existing union - because being correct matters more than being small, and
+    the caller has no way to check.
+    """
+    # Enums first, and the order is load-bearing. Pydantic emits an enum *with*
+    # a `type`, so checking `type` first produces
+    # `{"enum": ["farm","mine","road"], "type": ["string","null"]}` - which
+    # announces that null is allowed and then forbids it two keys later. The
+    # value has to join the member list instead, and `type` goes, because once
+    # null is a member the values are no longer all strings.
+    if isinstance(spec.get("enum"), list) and "$ref" not in spec:
+        out = {k: v for k, v in spec.items() if k != "type"}
+        return {**out, "enum": [*spec["enum"], None]}
+    if isinstance(spec.get("type"), str):
+        return {**spec, "type": [spec["type"], "null"]}
+    return {"anyOf": [spec, {"type": "null"}]}
+
+
+def strip_titles(schema: dict[str, Any]) -> dict[str, Any]:
+    """Drop `title`, which Pydantic emits everywhere and a grammar never reads.
+
+    830 bytes of it in the action schema - "City Id", "Unit Id", "Tax Pct" -
+    restating field names the model can already see as keys. That is twice the
+    budget that was missing when `claude-haiku-4-5` could not have both extended
+    thinking and a schema strict enough to enforce its own order fields, and the
+    workaround for that cost a live match: the loosened schema let the model
+    answer `{"action": "found_city"}` with no unit and no name, 91% of its
+    orders were dropped as unusable, and the civ was eliminated on turn 35.
+
+    Which makes this the cheapest 830 bytes in the project. It was always
+    removable and nobody looked, because the schema was already small enough
+    for every model that mattered at the time.
+    """
+    if isinstance(schema, list):
+        return [strip_titles(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    return {k: strip_titles(v) for k, v in schema.items() if k != "title"}
 
 
 def strip_descriptions(schema: dict[str, Any]) -> dict[str, Any]:
@@ -158,9 +215,7 @@ def flatten_unions(
                     # Strict: every field present, nulled where it does not
                     # apply, so the model cannot satisfy the schema by omitting
                     # the ones that matter. `actions.parse` strips the nulls.
-                    properties.setdefault(
-                        name, {"anyOf": [spec, {"type": "null"}]} if strict else spec
-                    )
+                    properties.setdefault(name, nullable(spec) if strict else spec)
         properties["action"] = {"enum": sorted(set(actions))}
         lead = (
             "Set `action`, then the fields that action needs; null the rest."
