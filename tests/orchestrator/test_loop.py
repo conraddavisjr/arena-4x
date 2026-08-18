@@ -603,3 +603,63 @@ async def test_the_allowance_does_nothing_when_the_experiment_is_off(tmp_path: P
     ]
     calls = collections.Counter(r["player_id"] for r in records(tmp_path, jl.AGENT_CALL))
     assert all(n == 4 for n in calls.values()), "every seat plays every turn"
+
+
+async def test_running_out_of_credits_halts_the_match(tmp_path: Path) -> None:
+    """The one provider failure that ends the match instead of costing a turn.
+
+    Every other failure here is survivable by design - an agent that cannot
+    answer passes, plays badly, and the match continues, which is right for a
+    vendor having a bad ten minutes. An exhausted account is not that: it will
+    not recover inside the run, so "keep going" silently converts a billing
+    problem into a corrupted result.
+
+    Measured before this existed. A 300-turn baseline reached turn 40, one
+    seat's credits ran out, and it played 29 further turns with that civ holding
+    its cities and issuing no orders - producing a four-way comparison missing a
+    fourth, at a cost of six hours and eighteen dollars if it had finished.
+    """
+    from arena_orchestrator.providers.base import OutOfCredits
+
+    class Broke:
+        name, model = "openai", "gpt-5.4-mini"
+
+        async def complete(self, system, user, schema):
+            raise OutOfCredits("You have no credits remaining.", provider="openai")
+
+        async def aclose(self):
+            return None
+
+    config = make_config(turns=40)
+    orchestrator = make_orchestrator(tmp_path, config, clients={"p2": Broke()})
+    result = await orchestrator.run()
+
+    assert result.reason == "provider_credits", "the match must stop, not limp"
+    assert result.state.turn < 40, "it stopped early rather than playing on"
+    # And it stopped *promptly* - the failure this guards is playing dozens of
+    # turns with a dead seat, so a couple of turns is fine and thirty is not.
+    assert result.state.turn <= 2, f"played {result.state.turn} turns with a broke seat"
+
+    ended = records(tmp_path, jl.MATCH_ENDED)
+    assert ended and ended[0]["reason"] == "provider_credits"
+    assert any("OutOfCredits" in r["reason"] for r in records(tmp_path, jl.AGENT_FAILURE))
+
+
+async def test_a_normal_provider_failure_still_only_costs_a_turn(tmp_path: Path) -> None:
+    """The distinction has to hold in both directions, or the halt is just a
+    crash with a nicer name. A transient outage must not end a multi-day match."""
+    from arena_orchestrator.providers.base import Overloaded
+
+    class Flaky:
+        name, model = "openai", "gpt-5.4-mini"
+
+        async def complete(self, system, user, schema):
+            raise Overloaded("upstream is having a moment", provider="openai")
+
+        async def aclose(self):
+            return None
+
+    config = make_config(turns=5)
+    result = await make_orchestrator(tmp_path, config, clients={"p2": Flaky()}).run()
+    assert result.reason == "turn_limit", "an outage must not end the match"
+    assert result.state.turn == 5

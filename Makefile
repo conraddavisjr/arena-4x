@@ -10,7 +10,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export library prices
+.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export library prices preflight
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -61,6 +61,9 @@ fmt:  ## Fix what can be fixed automatically
 run:  ## Play a match through the orchestrator. make run ROSTER=dry SEED=4
 	$(PY) scripts/run_match.py --roster $(or $(ROSTER),dry) --seed $(or $(SEED),4) \
 		$(if $(TURNS),--turns $(TURNS),)
+
+preflight:  ## Check every seat can actually spend. make preflight ROSTER=shakeout TURNS=300
+	$(PY) scripts/preflight.py --roster $(or $(ROSTER),shakeout) --turns $(or $(TURNS),300)
 
 prices:  ## Print the rate card with its provenance, for re-checking against vendors
 	@$(PY) -c "import sys; sys.path.insert(0,'packages'); \

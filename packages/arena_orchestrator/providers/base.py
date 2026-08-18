@@ -246,6 +246,45 @@ class FatalProviderError(ProviderError):
     """Bad key, bad model id, malformed request. Retrying cannot help."""
 
 
+class OutOfCredits(FatalProviderError):
+    """The account cannot pay. Distinguished because it ends the *match*.
+
+    Every other failure here is survivable by design: an agent that cannot
+    answer passes its turn, plays badly, and the match continues - which is the
+    right response to a vendor having a bad ten minutes.
+
+    An exhausted account is not that. It will not recover inside the run, so the
+    "keep going" policy turns one problem into a slow corruption of the result.
+    Measured: a 300-turn baseline ran 29 further turns after one seat's credits
+    ran out, with that civ holding its cities and issuing no orders, on its way
+    to producing a four-way comparison missing a fourth. It cost about six hours
+    and would have cost eighteen dollars more.
+
+    So this halts the match the way the budget cap does: on a coherent board,
+    scored, with a reason recorded. One lost turn instead of two hundred and
+    sixty.
+    """
+
+    # Recognised by message, because none of the four vendors gives this its own
+    # status code or error type - it arrives as a 400 or a 429 whose body
+    # happens to mention money. Matching on prose is fragile and is the only
+    # option; a miss costs the old behaviour rather than a crash.
+    MARKERS = (
+        "no credits remaining",
+        "credit balance is too low",
+        "insufficient_quota",
+        "insufficient credits",
+        "exceeded your current quota",
+        "billing hard limit",
+        "quota exceeded",
+    )
+
+    @classmethod
+    def matches(cls, message: str) -> bool:
+        low = message.lower()
+        return any(marker in low for marker in cls.MARKERS)
+
+
 async def unstalled(
     events: AsyncIterator[T],
     *,

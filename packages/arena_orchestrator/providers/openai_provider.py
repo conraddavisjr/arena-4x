@@ -38,6 +38,7 @@ from typing import Any
 from .base import (
     FatalProviderError,
     Malformed,
+    OutOfCredits,
     Overloaded,
     ProviderError,
     RateLimited,
@@ -349,6 +350,11 @@ def _completions_usage(raw: Any) -> Usage:
 def _translate(error: Exception, sdk: Any, provider: str) -> ProviderError:
     if isinstance(error, ProviderError):
         return error
+    # Before anything else, including the 429 path: an exhausted account
+    # often arrives *as* a rate limit, and retrying it burns the ladder on a
+    # condition that cannot improve.
+    if OutOfCredits.matches(str(error)):
+        return OutOfCredits(str(error), provider=provider)
     if isinstance(error, sdk.RateLimitError):
         headers = getattr(getattr(error, "response", None), "headers", None) or {}
         try:

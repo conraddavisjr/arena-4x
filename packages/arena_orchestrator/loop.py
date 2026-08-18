@@ -46,7 +46,7 @@ from .config import RunConfig
 from .dialects import for_provider
 from .journal import Journal
 from .providers import build as build_client
-from .providers.base import LLMClient, Usage
+from .providers.base import LLMClient, OutOfCredits, Usage
 from .resilience import CircuitBreaker, Sleeper, TokenBucket
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json"
@@ -268,7 +268,24 @@ class Orchestrator:
             if self.after_turn:
                 self.after_turn(state)
             while state.victory is None and state.turn < self.config.match.turn_limit:
-                actions, outcomes = await self._collect(state, journal)
+                try:
+                    actions, outcomes = await self._collect(state, journal)
+                except OutOfCredits as broke:
+                    # Halted rather than absorbed, and this is the one provider
+                    # failure treated that way. Everything else here is designed
+                    # so a bad vendor costs one civ one turn; an account that
+                    # cannot pay costs that civ *every remaining turn*, and the
+                    # match quietly becomes a three-way comparison nobody asked
+                    # for. Better to stop on a coherent board that can be
+                    # scored, exactly as the budget cap does.
+                    journal.append(
+                        jl.AGENT_FAILURE,
+                        state.turn + 1,
+                        player_id=getattr(broke, "player_id", None),
+                        reason=f"OutOfCredits: {broke}",
+                    )
+                    reason = "provider_credits"
+                    break
                 failures += sum(1 for o in outcomes.values() if o.passed)
                 state, events = step(state, actions)
                 self._remember_events(events)

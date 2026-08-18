@@ -164,10 +164,29 @@ async def main() -> None:
     )
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--resume", type=Path, default=None)
+    parser.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="skip the live check that every seat can actually spend",
+    )
     args = parser.parse_args()
 
     if args.roster != "dry":
         check_keys(args.roster)
+        # A key that exists is not a key that can pay, and the difference costs
+        # hours. A 300-turn baseline once reached turn 40 and played 29 more
+        # with one seat out of credits - holding cities, issuing no orders -
+        # because nothing had asked the question before starting. Four tiny
+        # calls, a few hundredths of a cent, and it is on by default because the
+        # run it protects is unattended.
+        if not args.no_preflight:
+            import preflight
+
+            if await preflight.check(args.roster, args.turns):
+                raise SystemExit(
+                    "preflight failed - fix the seats above, or pass --no-preflight "
+                    "to start anyway."
+                )
 
     root = args.resume or args.out or Path("output") / f"run-{args.roster}-{args.seed}"
     config = build_config(args)

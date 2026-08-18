@@ -32,7 +32,7 @@ from pydantic import ValidationError
 from arena_engine import rules
 from arena_engine.actions import Action, parse, pass_turn
 
-from .providers.base import LLMClient, ProviderError, Turn
+from .providers.base import LLMClient, OutOfCredits, ProviderError, Turn
 from .resilience import CircuitBreaker, RetryPolicy, Sleeper, TokenBucket, with_retry
 
 # Two attempts total, and the second one is worth having: a schema violation is
@@ -97,6 +97,15 @@ class Agent:
             return await asyncio.wait_for(self._attempt(user), timeout=self.timeout_s)
         except TimeoutError:
             return Outcome(action=pass_turn(), failure=f"timeout after {self.timeout_s:.0f}s")
+        except OutOfCredits:
+            # The one failure this method does not absorb. "An agent that cannot
+            # answer passes its turn" is the right policy for a vendor having a
+            # bad ten minutes, and the wrong one for an account that cannot pay:
+            # that will not recover inside the run, so passing turns quietly
+            # converts a billing problem into a corrupted result. Measured - a
+            # 300-turn baseline played 29 further turns with one civ holding
+            # cities and issuing no orders. Raised so the loop can halt.
+            raise
         except ProviderError as error:
             return Outcome(action=pass_turn(), failure=f"{type(error).__name__}: {error}")
 

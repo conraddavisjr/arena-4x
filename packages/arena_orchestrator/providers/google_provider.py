@@ -36,6 +36,7 @@ from typing import Any
 from .base import (
     FatalProviderError,
     Malformed,
+    OutOfCredits,
     Overloaded,
     ProviderError,
     RateLimited,
@@ -198,6 +199,8 @@ def _usage(raw: Any) -> Usage:
 
 
 def _translate(error: Exception, provider: str) -> ProviderError:
+    if OutOfCredits.matches(str(error)):
+        return OutOfCredits(str(error), provider=provider)
     """Classify by status code, because this SDK raises one error type.
 
     `google.genai.errors.APIError` carries the status rather than splitting into

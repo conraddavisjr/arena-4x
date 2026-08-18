@@ -248,6 +248,43 @@ inputs) and wrong about its own vendor's model, quoting flash-lite at
 $0.54/$4.50 against a real $0.30/$2.50. Both of us were confidently wrong about
 something. The vendor pages settled it in four fetches.
 
+### A dead seat is not a slow seat, and the loop could not tell
+
+A 300-turn baseline reached turn 40, one seat's API credits ran out, and it
+played **29 further turns with that civ holding its cities and issuing no
+orders** - on its way to producing a four-way comparison missing a fourth. Six
+hours of wall clock and about eighteen more dollars, had it finished.
+
+Every piece of software involved behaved exactly as designed. "An agent that
+cannot answer passes its turn, and the match continues" is the right policy for
+a vendor having a bad ten minutes, and precisely the wrong one for an account
+that cannot pay: that does not recover inside the run, so the fallback quietly
+converts a billing problem into a corrupted result. The circuit breaker even
+opened, correctly, and the match went on regardless.
+
+Two changes, and the second matters more than the first:
+
+- **`make preflight`** probes every seat with one tiny call before anything
+  unattended, and `run_match` runs it automatically. It probes rather than
+  reading a balance because no vendor here exposes one on a normal key - but
+  every one of them will tell you immediately that you cannot spend, which is
+  the answerable version of the question. It also prints the projected spend per
+  seat, so the number you compare against a billing page is not a guess.
+- **`OutOfCredits` halts the match**, the way the budget cap does: on a coherent
+  board, scored, with `reason: "provider_credits"`. One lost turn instead of two
+  hundred and sixty. It is matched on message text, because not one of the four
+  vendors gives this its own status code or error type - it arrives as a 400 or
+  a 429 whose body happens to mention money.
+
+The general lesson is about fallbacks rather than billing. **A graceful
+degradation that cannot distinguish transient from permanent will eventually
+degrade gracefully for a very long time.** Tests now pin both directions: an
+outage must not end a match, and an exhausted account must.
+
+*Aside:* the preflight's first version had no retry, so a single transient stall
+failed it on an account that was fine - the check was less resilient than the
+thing it checked. It uses the same retry ladder now.
+
 ### Turning on thinking shrinks the grammar budget
 
 The third distinct Anthropic schema limit here, and the one that nearly cost a
@@ -633,6 +670,8 @@ saying which case is which.
 4c. When a vendor limit blocks a design, **bisect it before redesigning around
    it**. The grammar ceiling looked like it cost a seat its reasoning; it cost
    423 bytes.
+4d. `make preflight` before anything unattended. A key that exists is not a key
+   that can pay, and the gap between those two facts cost six hours.
 5. Stage the viewer against a bot match before a paid one. It costs nothing and
    it is the only way to tell "this match had no diplomacy" from "this panel
    never rendered".

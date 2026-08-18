@@ -38,6 +38,7 @@ from .base import (
     THINKING_BUDGET,
     FatalProviderError,
     Malformed,
+    OutOfCredits,
     Overloaded,
     ProviderError,
     RateLimited,
@@ -241,6 +242,10 @@ def _translate(error: Exception, sdk: Any) -> ProviderError:
     if isinstance(error, ProviderError):
         return error
     name = "anthropic"
+    # Before the 429 path: an exhausted account often arrives *as* a rate limit,
+    # and retrying it spends the ladder on something that cannot improve.
+    if OutOfCredits.matches(str(error)):
+        return OutOfCredits(str(error), provider=name)
     if isinstance(error, sdk.RateLimitError):
         return RateLimited(str(error), provider=name, retry_after=retry_after_of(error))
     if isinstance(error, sdk.APITimeoutError):
