@@ -269,11 +269,23 @@ class OutOfCredits(FatalProviderError):
     # status code or error type - it arrives as a 400 or a 429 whose body
     # happens to mention money. Matching on prose is fragile and is the only
     # option; a miss costs the old behaviour rather than a crash.
+    # Every phrase here was observed on a live account, not guessed. Google's
+    # wording was missed by the first version of this list and arrived as a
+    # *429* - so it was classified `RateLimited`, which is retryable, which
+    # means the ladder would have spun on a condition that cannot improve and
+    # the match would have limped instead of halting. Found by the model-action
+    # suite rather than by a run, which is the cheap way round.
+    #
+    # Deliberately specific. Matching "quota" or "billing" alone would catch
+    # ordinary rate limits and halt a multi-day match over a bad ten minutes,
+    # which is the failure this class exists to avoid causing.
     MARKERS = (
         "no credits remaining",
         "credit balance is too low",
         "insufficient_quota",
         "insufficient credits",
+        "credits are depleted",
+        "prepayment credits",
         "exceeded your current quota",
         "billing hard limit",
         "quota exceeded",

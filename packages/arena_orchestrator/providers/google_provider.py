@@ -199,8 +199,6 @@ def _usage(raw: Any) -> Usage:
 
 
 def _translate(error: Exception, provider: str) -> ProviderError:
-    if OutOfCredits.matches(str(error)):
-        return OutOfCredits(str(error), provider=provider)
     """Classify by status code, because this SDK raises one error type.
 
     `google.genai.errors.APIError` carries the status rather than splitting into
@@ -209,6 +207,12 @@ def _translate(error: Exception, provider: str) -> ProviderError:
     """
     if isinstance(error, ProviderError):
         return error
+    # Before the status check, and that ordering is the whole point here: this
+    # vendor reports an exhausted account as a **429**, so classifying by status
+    # alone makes it `RateLimited` - retryable - and the match spins the ladder
+    # on a condition that cannot improve instead of halting.
+    if OutOfCredits.matches(str(error)):
+        return OutOfCredits(str(error), provider=provider)
     status = getattr(error, "code", None) or getattr(error, "status_code", 0)
     try:
         status = int(status)

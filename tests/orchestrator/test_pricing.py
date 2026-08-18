@@ -96,3 +96,48 @@ def test_the_seat_that_was_six_times_wrong() -> None:
     rate = RATES["grok-4.3"]
     assert (rate.input, rate.output) == (1.25, 2.50)
     assert "200k" in rate.tier_note, "the tier break above 200k prompt tokens must stay recorded"
+
+
+# ---------------------------------------------------------------------------
+# Credit exhaustion, recognised by wording
+# ---------------------------------------------------------------------------
+
+
+def test_every_observed_credit_message_is_recognised() -> None:
+    """Each of these was seen on a live account, and one was missed.
+
+    Google reports an exhausted account as a **429**, so before its wording was
+    added it classified as `RateLimited` - retryable - and a match would have
+    spun the retry ladder on a condition that cannot improve rather than
+    halting. The preflight blocked the run anyway because any failure blocks,
+    but that was luck rather than design: mid-run there is no preflight.
+
+    Found by the model-action suite rather than by a 300-turn match, which is
+    the cheap way round and the reason that suite exists.
+    """
+    from arena_orchestrator.providers.base import OutOfCredits
+
+    seen = [
+        "You have no credits remaining. Add credits to continue using the API",  # OpenAI
+        "Your credit balance is too low to access the Anthropic API",  # Anthropic
+        "Your prepayment credits are depleted. Please go to AI Studio",  # Google, as a 429
+    ]
+    for message in seen:
+        assert OutOfCredits.matches(message), f"not recognised: {message[:40]}"
+
+
+def test_an_ordinary_rate_limit_is_not_mistaken_for_bankruptcy() -> None:
+    """The expensive direction of this mistake.
+
+    Matching "quota" or "billing" loosely would catch routine throttling and end
+    a multi-day match over a bad ten minutes - causing exactly the failure this
+    class exists to prevent, in the other direction.
+    """
+    from arena_orchestrator.providers.base import OutOfCredits
+
+    for message in (
+        "Rate limit reached for requests. Please try again in 20s",
+        "429 Too Many Requests",
+        "overloaded_error: the fleet is busy",
+    ):
+        assert not OutOfCredits.matches(message), f"false positive: {message}"

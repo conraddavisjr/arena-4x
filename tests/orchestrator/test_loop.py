@@ -663,3 +663,82 @@ async def test_a_normal_provider_failure_still_only_costs_a_turn(tmp_path: Path)
     result = await make_orchestrator(tmp_path, config, clients={"p2": Flaky()}).run()
     assert result.reason == "turn_limit", "an outage must not end the match"
     assert result.state.turn == 5
+
+
+async def test_an_unusable_order_earns_one_correction(tmp_path: Path) -> None:
+    """The silent discard that eliminated a civilisation, now audible.
+
+    A `found_city` with no unit and no name never reaches the reducer, so it
+    gets no `order_rejected` - `actions.parse` discards it first. Nothing was
+    logged, nothing failed, and from outside it looked exactly like a model
+    choosing to do nothing. One seat spent 91% of its orders this way across
+    128 turns and was eliminated on turn 35.
+
+    It now costs one round trip and a message naming the missing fields.
+    """
+    from arena_orchestrator.providers.scripted import ScriptedClient
+
+    good = {
+        "reasoning": {
+            "situation_assessment": "a",
+            "threats_and_opportunities": [],
+            "plan_this_turn": "b",
+        },
+        "dossier": {
+            "doctrine": "",
+            "opponent_models": [],
+            "standing_commitments": [],
+            "lessons": [],
+        },
+        "diplomacy": [],
+        "orders": [{"action": "set_research", "tech": "pottery"}],
+    }
+    broken = {**good, "orders": [{"action": "found_city"}]}
+    seen: list[str] = []
+
+    def respond(user: str):
+        seen.append(user)
+        return broken if len(seen) == 1 else good
+
+    config = make_config(turns=1)
+    orchestrator = make_orchestrator(tmp_path, config, clients={"p1": ScriptedClient(respond)})
+    await orchestrator.run()
+
+    assert len(seen) == 2, "an unusable order should buy exactly one retry"
+    # And the correction has to say what was wrong, or it is just a re-ask.
+    assert "discarded" in seen[1]
+    assert "found_city needs name, unit_id" in seen[1]
+    assert records(tmp_path, jl.PARSE_REPAIRED), "the repair went unrecorded"
+
+
+async def test_a_clean_turn_costs_exactly_one_call(tmp_path: Path) -> None:
+    """The correction must not fire on turns that were fine - it would double
+    the bill and the wall clock of every match for nothing."""
+    from arena_orchestrator.providers.scripted import ScriptedClient
+
+    good = {
+        "reasoning": {
+            "situation_assessment": "a",
+            "threats_and_opportunities": [],
+            "plan_this_turn": "b",
+        },
+        "dossier": {
+            "doctrine": "",
+            "opponent_models": [],
+            "standing_commitments": [],
+            "lessons": [],
+        },
+        "diplomacy": [],
+        "orders": [{"action": "set_research", "tech": "pottery"}],
+    }
+    seen: list[str] = []
+
+    def respond(user: str):
+        seen.append(user)
+        return good
+
+    await make_orchestrator(
+        tmp_path, make_config(turns=3), clients={"p1": ScriptedClient(respond)}
+    ).run()
+    assert len(seen) == 3, f"clean turns should be one call each, got {len(seen)}"
+    assert not records(tmp_path, jl.PARSE_REPAIRED)

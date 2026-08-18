@@ -17,7 +17,7 @@ they explain shapes that would otherwise look odd:
 from __future__ import annotations
 
 import json
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -277,14 +277,52 @@ def parse(raw: str | bytes) -> Action:
     Use this rather than `Action.model_validate_json` anywhere a real provider
     is on the other end.
     """
+    return parse_reporting_drops(raw)[0]
+
+
+def parse_reporting_drops(raw: str | bytes) -> tuple[Action, list[dict[str, Any]]]:
+    """`parse`, and the entries it had to throw away.
+
+    Dropping is the right call - a `found_city` with no unit cannot be repaired
+    into anything, and failing the whole payload over it would discard the
+    orders that were fine. But dropping *silently* is how a civilisation died:
+    `claude-haiku-4-5` sent unusable orders on 91% of its turns, every one
+    discarded here, and from the outside that is indistinguishable from a model
+    choosing to do nothing. It founded no cities and was eliminated on turn 35
+    of a 128-turn match with nothing in any log marked as a failure.
+
+    So the discards come back too, and `Agent._attempt` turns them into a
+    correction the model can act on. The engine has always explained a rejected
+    *order* to the civ that issued it; this closes the same loop one layer up,
+    for an order that never reached the engine at all.
+    """
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError(f"expected a JSON object, got {type(payload).__name__}")
+    dropped: list[dict[str, Any]] = []
     for key in ("orders", "diplomacy"):
         value = payload.get(key)
-        if isinstance(value, list):
-            payload[key] = [t for t in (_trim(i) for i in value) if _usable(t)]
-    return Action.model_validate(payload)
+        if not isinstance(value, list):
+            continue
+        kept = []
+        for item in value:
+            trimmed = _trim(item)
+            if _usable(trimmed):
+                kept.append(trimmed)
+            elif isinstance(trimmed, dict):
+                dropped.append({"kind": key, **trimmed})
+        payload[key] = kept
+    return Action.model_validate(payload), dropped
+
+
+def why_unusable(entry: dict[str, Any]) -> str:
+    """A sentence a model can act on, naming the fields it left out."""
+    action = entry.get("action")
+    required = _BRANCH_REQUIRED.get(action)
+    if required is None:
+        return f"{action!r} is not one of the actions this game accepts"
+    missing = sorted(required - set(entry))
+    return f"{action} needs {', '.join(missing)}, and you sent none of them"
 
 
 def _usable(item: object) -> bool:
