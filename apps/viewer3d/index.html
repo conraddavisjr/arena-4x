@@ -172,14 +172,38 @@
   .ref:hover{background:#ffd16633;border-bottom-color:#ffd166;color:#ffe9b0}
   .ref.unit{border-bottom-style:solid}
   .ref.gone{border-bottom-color:#4d5560;color:var(--faint);cursor:help}
+  /* Charts. Inline SVG and flexbox - no library, because the published artifact
+     has to open offline with no external requests. */
+  .chart{display:flex;gap:10px;align-items:center;margin-top:10px;
+    padding-top:8px;border-top:1px solid var(--line)}
+  .charthead{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--dim);margin-bottom:4px}
+  .dtotal{fill:var(--ink);font-size:15px;font-weight:600;text-anchor:middle;
+    dominant-baseline:central;font-variant-numeric:tabular-nums}
+  .sharelist{flex:1;min-width:0}
+  .sharerow{display:grid;grid-template-columns:9px 1fr auto auto;gap:6px;
+    align-items:center;font-size:11px;margin:2px 0}
+  .sharename{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sharenum{color:var(--dim);font-variant-numeric:tabular-nums}
+  .sharepct{color:var(--faint);width:30px;text-align:right;font-variant-numeric:tabular-nums}
+  .ygrid{display:flex;gap:10px}
+  .ygroup{flex:1;min-width:0}
+  .ylabel{font-size:10px;color:var(--faint);text-align:center;margin-bottom:3px;
+    cursor:help}
+  /* Each group scales to its own leader: gold and science are different units,
+     and a shared axis would flatten science to nothing. */
+  .ybars{display:flex;gap:2px;align-items:flex-end;height:38px}
+  .ybar{flex:1;display:flex;align-items:flex-end;height:100%;background:#161c24;
+    border-radius:2px;overflow:hidden}
+  .ybar i{display:block;width:100%;border-radius:2px;min-height:2px}
   td .n{margin-left:6px;color:var(--faint);font-size:11px}
   td.hurt{color:#f87171;font-weight:600}
   .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
   button.who-btn{font-size:11px;padding:3px 7px}
   table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
-  th,td{text-align:right;padding:3px 4px}
+  th,td{text-align:right;padding:3px 4px;white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
-  td.name{width:42%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  td.name{width:44%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   thead th{color:var(--dim);font-weight:500;font-size:11px;border-bottom:1px solid var(--line)}
   thead th[title]{cursor:help;text-decoration:underline dotted var(--faint);
     text-underline-offset:3px}
@@ -213,7 +237,9 @@
   /* A tick rather than a highlight alone, so the current view survives being
      read at a glance or in a screenshot. */
   #viewMenu button[aria-checked="true"]::after{content:"✓";margin-left:auto;color:#4ade80}
-  .civ{display:flex;align-items:center;gap:6px}
+  .civ{display:flex;align-items:center;gap:6px;min-width:0}
+  .civ .dot{flex:0 0 auto}
+  .civ>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* The name keeps its line; tags wrap underneath it. Long tag text was
      squeezing "gpt-5.4-mini" into three wrapped lines. */
   .sigrow .who{flex-wrap:wrap;row-gap:4px}
@@ -660,7 +686,14 @@ async function foldTo(turn) {
         acc.effortBefore = acc.effort ?? null;
         acc.effort = row.effort;
         acc.effortSent = row.effort_sent || row.effort;
+        (acc.efforts ??= new Set()).add(row.effort);
       }
+      // Output tokens per turn, kept as a series. The *declared* dial is one of
+      // three words and, on a fixed-effort match, never moves - so charting its
+      // variation would draw four flat lines and call it a finding. What
+      // actually varies is how much each model spends thinking, turn to turn,
+      // and that varies enormously: measured across seats, a factor of thirty.
+      (acc.perTurn ??= []).push(row.output || 0);
     }
     before = dossiers;
     dossiers = { ...dossiers, ...(f.dossiers || {}) };
@@ -889,6 +922,54 @@ function dossierPick(ev) {
  * project. Older bundles predate these fields, so the meter falls back to a
  * plain tech count and says which it is showing rather than inventing certainty.
  */
+/**
+ * How steadily each model thinks.
+ *
+ * Two different questions live here and only one has an interesting answer
+ * right now. The *declared* effort is a match-level setting - every seat is
+ * told `medium` - so its variation is zero by construction, and the panel says
+ * so rather than drawing four flat lines and implying a result.
+ *
+ * The measured question is how much each model actually spends per turn, and
+ * that swings hard: a seat may cruise for twenty turns and then think five
+ * times as long about a war. The bar is the spread - each seat's own
+ * turn-to-turn variation as a share of its median - so a steady seat reads
+ * short and a lurching one reads long, independent of whether it is an
+ * expensive model or a cheap one.
+ */
+function effortVariation(rows) {
+  const stats = rows.map(({ c, s }) => {
+    const series = (s.perTurn || []).filter((n) => n > 0);
+    if (series.length < 3) return null;
+    const sorted = [...series].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] || 1;
+    const mean = series.reduce((a, b) => a + b, 0) / series.length;
+    const sd = Math.sqrt(series.reduce((a, b) => a + (b - mean) ** 2, 0) / series.length);
+    return { c, cv: sd / Math.max(median, 1), median, peak: Math.max(...series) };
+  }).filter(Boolean);
+  if (!stats.length) return "";
+
+  const dials = new Set(rows.flatMap(({ s }) => [...(s.efforts || [])]));
+  const worst = Math.max(...stats.map((r) => r.cv)) || 1;
+  return `<div class="race">
+    <div class="racehead">thinking, turn to turn
+      <span class="meta" title="Each bar is that model's own variation in output
+        tokens per turn, relative to its own median - so it compares steadiness,
+        not size. A long bar means a model that sometimes thinks far harder than
+        usual; a short one means it spends about the same every turn.">${
+        dials.size > 1 ? "effort dial moved during this match" :
+        `declared effort fixed at ${[...dials][0] || "medium"} - this is measured spend`}</span></div>
+    ${[...stats].sort((a, b) => b.cv - a.cv).map((r) => `
+      <div class="racerow" title="median ${Math.round(r.median).toLocaleString()} output
+        tokens a turn, peak ${Math.round(r.peak).toLocaleString()}">
+        <span class="dot" style="background:${CSS[r.c.colour]}"></span>
+        <span class="racename">${esc(r.c.model || r.c.civ_name)}</span>
+        <span class="bars"><i style="width:${Math.round(100 * r.cv / worst)}%;
+          background:${CSS[r.c.colour]}"></i></span>
+        <span class="racenote">${r.cv.toFixed(2)}x</span></div>`).join("")}
+  </div>`;
+}
+
 function scienceRace(rows) {
   const known = rows.map(({ c, e }) => ({
     c,
@@ -965,6 +1046,82 @@ function warFronts(rows) {
   </div>`;
 }
 
+/**
+ * A donut of shares, drawn as inline SVG.
+ *
+ * No chart library: the artifact has to be self-contained and open offline, so
+ * a CDN script is not an option and 40 lines of arc maths is cheaper than
+ * vendoring one. A donut rather than a pie because the hole gives the total
+ * somewhere to live, and the total is half the point - "$5.18 across four
+ * seats" and "one seat is 58% of it" are the two facts together.
+ *
+ * Slices under 2% still get drawn. A seat spending almost nothing is exactly
+ * the comparison worth seeing, and rounding it away would flatter it.
+ */
+function donut(slices, { size = 108, label = "", centre = null } = {}) {
+  const total = slices.reduce((a, s) => a + Math.max(0, s.value), 0);
+  if (total <= 0) return "";
+  const r = size / 2 - 2;
+  const inner = r * 0.58;
+  let angle = -Math.PI / 2;
+  const arcs = slices.map((s) => {
+    const frac = Math.max(0, s.value) / total;
+    // A single slice would produce a zero-length arc and vanish, so a full
+    // circle is drawn as two half arcs.
+    const sweep = frac >= 1 ? Math.PI * 1.999 : frac * Math.PI * 2;
+    const from = angle;
+    const to = (angle += sweep);
+    const big = sweep > Math.PI ? 1 : 0;
+    const pt = (rad, a) => `${(size / 2 + rad * Math.cos(a)).toFixed(2)} ${(size / 2 + rad * Math.sin(a)).toFixed(2)}`;
+    const d = `M ${pt(r, from)} A ${r} ${r} 0 ${big} 1 ${pt(r, to)}`
+      + ` L ${pt(inner, to)} A ${inner} ${inner} 0 ${big} 0 ${pt(inner, from)} Z`;
+    return `<path d="${d}" fill="${s.colour}" opacity="0.92"
+      title="${esc(s.name)} ${Math.round(frac * 100)}%"></path>`;
+  }).join("");
+  const middle = centre
+    ? `<text x="${size / 2}" y="${size / 2}" class="dtotal">${esc(centre(total))}</text>`
+    : "";
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}"
+    role="img" aria-label="${esc(label)}">${arcs}${middle}</svg>`;
+}
+
+/** Legend rows beside a donut: colour, name, value, share. */
+function shares(slices, fmt) {
+  const total = slices.reduce((a, s) => a + Math.max(0, s.value), 0) || 1;
+  return [...slices].sort((a, b) => b.value - a.value).map((s) => `
+    <div class="sharerow">
+      <span class="dot" style="background:${s.colour}"></span>
+      <span class="sharename">${esc(s.name)}</span>
+      <span class="sharenum">${fmt(s.value)}</span>
+      <span class="sharepct">${Math.round(100 * Math.max(0, s.value) / total)}%</span>
+    </div>`).join("");
+}
+
+/**
+ * Grouped bars, one group per yield, one bar per civ.
+ *
+ * Grouped rather than a donut per yield, because the question is "who leads
+ * each of these", and four donuts side by side answers it four times without
+ * ever putting the civs next to each other. Each group scales to its own
+ * leader - gold and science are different units and a shared axis would make
+ * science invisible.
+ */
+function yieldBars(rows, metrics) {
+  return metrics.map(({ key, label, hint }) => {
+    const peak = Math.max(1, ...rows.map(({ e }) => Math.max(0, e[key] || 0)));
+    return `<div class="ygroup">
+      <div class="ylabel" title="${esc(hint)}">${label}</div>
+      <div class="ybars">${rows.map(({ c, e }) => {
+        const v = Math.max(0, e[key] || 0);
+        return `<span class="ybar" title="${esc(c.model || c.civ_name)}: ${v}">
+          <i style="height:${Math.round(100 * v / peak)}%;background:${CSS[c.colour]}"></i></span>`;
+      }).join("")}</div>
+    </div>`;
+  }).join("");
+}
+
+const SHORT_EFFORT = { minimal: "min", low: "low", medium: "med", high: "high" };
+
 function effortCell(s) {
   if (!s.effort) return `<td class="meta">—</td>`;
   // A change is marked, not merely implied by the value differing from a row you
@@ -974,7 +1131,7 @@ function effortCell(s) {
   const detail = s.effortSent && s.effortSent !== s.effort
     ? `${esc(s.effort)} — sent as ${esc(s.effortSent)}` : esc(s.effort);
   return `<td title="${moved ? `changed from ${esc(s.effortBefore)}. ` : ""}${detail}"
-    class="${moved ? "moved" : ""}">${esc(s.effort)}${
+    class="${moved ? "moved" : ""}">${esc(SHORT_EFFORT[s.effort] || s.effort)}${
     moved ? `<span class="arrow-up">▲</span>` : ""}</td>`;
 }
 
@@ -995,14 +1152,35 @@ function panels() {
     S.match.civs.map((c) => {
       const d = e[c.player_id] || {};
       const name = `<td class="name" title="${c.civ_name} · ${c.model || "?"}">
-        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
-          c.model || c.civ_name}</span></td>`;
+        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span><span>${
+          esc(c.model || c.civ_name)}</span></span></td>`;
       if (!knows(c.player_id)) return `<tr class="fogged">${name}${hidden}</tr>`;
       return `<tr class="${d.alive?"":"dead"}">${name}
         <td>${d.gold??0} ${sign(d.gold_per_turn??0)}</td><td>${d.food_stored??0} ${sign(d.food_surplus??0)}</td>
         <td>${d.production_per_turn??0}</td><td>${d.science_per_turn??0}</td>
         <td>${d.cities??0}/${d.units??0}</td><td>${d.score??0}</td></tr>`;
-    }).join("")}</tbody></table>`;
+    }).join("")}</tbody></table>
+    ${(() => {
+      const rows = S.match.civs
+        .filter((c) => (S.frame.economy?.[c.player_id] || {}).alive !== false)
+        .map((c) => ({ c, e: S.frame.economy?.[c.player_id] || {} }));
+      if (!rows.length) return "";
+      const slices = rows.map(({ c, e }) => ({
+        name: c.model || c.civ_name, value: e.score || 0, colour: CSS[c.colour],
+      }));
+      return `<div class="chart">
+          ${donut(slices, { label: "share of score", centre: (t) => t.toLocaleString() })}
+          <div class="sharelist"><div class="charthead">share of score</div>
+            ${shares(slices, (v) => String(v))}</div></div>
+        <div class="charthead" style="margin-top:8px">output this turn</div>
+        <div class="ygrid">${yieldBars(rows, [
+          { key: "gold_per_turn", label: "gold", hint: "Net gold per turn after upkeep." },
+          { key: "food_surplus", label: "food", hint: "Food surplus per turn across all cities - what growth runs on." },
+          { key: "production_per_turn", label: "prod", hint: "Production per turn across all cities." },
+          { key: "science_per_turn", label: "sci", hint: "Science per turn - what the tech race runs on." },
+          { key: "culture_per_turn", label: "cult", hint: "Culture per turn, which feeds the score at the turn limit." },
+        ])}</div>`;
+    })()}`;
 
   // The cost meter. Deliberately *not* fog-limited: what a run cost is a fact
   // about the experiment rather than about the game, and hiding another
@@ -1014,11 +1192,11 @@ function panels() {
     <table><thead><tr>
       <th title="Which model played this seat.">model</th>
       <th title="What this seat has cost so far, in US dollars, from the token counts the vendor actually reported - never an estimate. This is what the budget cap is measured against.">$</th>
-      <th title="Output tokens produced, including reasoning tokens where the vendor bills them as output. This is the expensive half: output runs about five times the price of input.">out tok</th>
+      <th title="Output tokens produced, including reasoning tokens where the vendor bills them as output. This is the expensive half: output runs about five times the price of input.">out</th>
       <th title="Share of input tokens served from cache at roughly a tenth the price. The system prompt is identical every turn, so a healthy number here is large. Zero is worth investigating on a vendor with an explicit cache breakpoint.">cache</th>
-      <th title="Median wall-clock seconds per turn. Turns resolve simultaneously, so the slowest seat sets the pace of the whole match.">s/turn</th>
+      <th title="Median wall-clock seconds per turn. Turns resolve simultaneously, so the slowest seat sets the pace of the whole match.">sec</th>
       <th title="How hard this seat was told to think on this turn. Shown every turn rather than only when it moves, so a steady seat reads as deliberate rather than as missing data. A green mark means it changed from the turn before. Hover the value for the vendor's own form of it - the four do not share an instrument, so 'medium' is an enum on some seats and a token budget on others.">effort</th>
-      <th title="Score gained per 100,000 tokens spent. The efficiency figure: it compares a cheap model playing adequately against an expensive one playing slightly better, and a leaderboard by this can invert a leaderboard by score.">per 100k</th>
+      <th title="Score gained per 100,000 tokens spent. The efficiency figure: it compares a cheap model playing adequately against an expensive one playing slightly better, and a leaderboard by this can invert a leaderboard by score.">/100k</th>
       </tr></thead><tbody>${
       totals.map(({ c, s }) => {
         const tokens = s.input + s.output + s.cached;
@@ -1033,10 +1211,10 @@ function panels() {
         // prefix from cache reported 13% purely because it thought at length.
         const inTokens = s.input + s.cached;
         const cachePct = inTokens ? Math.round(100 * s.cached / inTokens) : 0;
-        return `<tr><td class="name" title="${c.civ_name}">
-          <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
-            c.model || c.civ_name}</span></td>
-          <td>${s.usd.toFixed(3)}</td><td>${(s.output/1000).toFixed(1)}k</td>
+        return `<tr><td class="name" title="${esc(c.model || "")} playing ${c.civ_name}">
+          <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span><span>${
+            esc(c.model || c.civ_name)}</span></span></td>
+          <td>${s.usd.toFixed(3)}</td><td>${s.output >= 1e6 ? (s.output/1e6).toFixed(2) + "M" : (s.output/1000).toFixed(1) + "k"}</td>
           <td class="${cachePct ? "" : "warn"}" title="${cachePct ? "" :
             "no cache reads. Worth chasing on a vendor with an explicit breakpoint - " +
             "a prefix written and never read costs 12.5x. On Gemini it is expected: " +
@@ -1047,6 +1225,16 @@ function panels() {
           ${effortCell(s)}
           <td>${per.toFixed(0)}</td></tr>`;
       }).join("")}</tbody></table>
+    ${(() => {
+      const slices = totals.map(({ c, s }) => ({
+        name: c.model || c.civ_name, value: s.usd, colour: CSS[c.colour],
+      }));
+      return `<div class="chart">
+        ${donut(slices, { label: "share of spend", centre: (t) => "$" + t.toFixed(2) })}
+        <div class="sharelist"><div class="charthead">share of spend</div>
+          ${shares(slices, (v) => "$" + v.toFixed(3))}</div></div>`;
+    })()}
+    ${effortVariation(totals)}
     <div class="tick" style="margin-top:6px">$${grand.toFixed(3)} through turn ${S.turn}
       · ${(grand / S.turn * S.match.turn_limit).toFixed(2)} projected at the cap</div>`;
 

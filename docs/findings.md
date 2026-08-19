@@ -542,9 +542,41 @@ not prompt anyone to look.
   bundle, which is now the habit.
 - **A block placed above the values it read** threw a temporal-dead-zone error
   on every render, and the page absorbed it by not drawing the sections below.
+- **A column with no room is a column that says nothing.**
+  Replacing `p1..p4` with real model ids made the cost table unreadable: six
+  numeric columns took 273 of the panel's 331 pixels and left the model name
+  59, so every row identified itself as `cl...`.
+  Two rows both truncated to `g...`.
+  The name also had no ellipsis, because the flex wrapper inside the cell
+  swallowed the one on the cell itself - so it clipped mid-glyph and did not
+  even look truncated.
+  The fix was to shorten the *headers*, which each already carry a full
+  sentence on hover, rather than the data.
+  Worth stating because the reflex is to shorten the identifier, which is the
+  one thing on the row that cannot be recovered from context.
 
-The rule both suggest: a `return` is only trustworthy in a function that does
-one thing. Both blocks are their own functions now.
+The rule the first two suggest: a `return` is only trustworthy in a function
+that does one thing. Both blocks are their own functions now.
+
+---
+
+## A pytest marker that does not exist excludes nothing
+
+`pyproject.toml` sets `addopts = "-m 'not contract'"` so the paid contract
+tests stay out of the default run.
+Passing `-m "not live"` on the command line - a marker this project has never
+defined - **overrode that**, because a later `-m` replaces the earlier one, and
+`not live` is true of every test in the suite.
+The command that was meant to be *more* cautious than the default selected the
+live provider tests instead.
+
+Nothing failed loudly: the contract tests skip themselves when a key is absent,
+and the keys are present here, so the only signal would have been the bill.
+
+The rule: never pass `-m` to this suite.
+The default already excludes what costs money, and any `-m` silently discards
+that default.
+`make contracts` is the deliberate way in.
 
 ---
 
