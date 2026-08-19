@@ -580,6 +580,54 @@ that default.
 
 ---
 
+## Three quarters of the violence never reached the viewer
+
+Every panel that counts fighting was counting a quarter of it.
+
+A civ's attack emits `combat_resolved` carrying `defender_owner`, both unit
+types and both death flags.
+The wilderness emits the same event type from `barbarians._strike` with none of
+those fields.
+The bundle's combat feed keys on `attacker_type`, so it silently kept the civ
+attacks and dropped every wilderness one: **28 of 103 blows struck in the first
+complete match**.
+
+The consequence was not a missing panel but a confident wrong one.
+A civ mauled by wolves thirty times rendered identically to a civ at peace,
+and the Signals combat bar - whose whole job is "who is being worn down" -
+answered with the subset of fights that happened to carry a type field.
+
+It also inverted a headline.
+Counting only what the bundle carried, the match looked like 20 fights against
+the wilderness and 8 between civs, a ratio of 2.5.
+The true figure is 95 and 8, a ratio of 11.9 - the same finding, four times
+understated, and it was about to go into a public post at the wrong number.
+
+The event payload is now identical on both paths, and a test asserts each field
+by name rather than asserting that some payload exists - the bug was an
+omission, and a shape check would have passed against it.
+
+Bundles built before the fix cannot be repaired, because the journal never had
+the fields.
+The viewer therefore reads wilderness-initiated fights from the events for those
+matches, and skips the fallback when it sees a bundle whose `combat` already
+contains a wilderness attacker.
+
+### Treaty paperwork was being counted as conversation
+
+Smaller, same shape.
+`frame.messages` carries three kinds - `message`, `proposal`, `reply` - and the
+fold counted all three as things a civ said.
+That reported 585 private messages against a real 481, and made a civ that
+negotiated a lot look like a civ that talked a lot.
+Proposals are counted where they mean something, which is the diplomacy tally.
+
+The rule both share: when one producer writes a record and another reads it by
+looking for a field, the reader silently defines what counts.
+Neither of these threw, logged, or drew an empty box.
+
+---
+
 ## Costs
 
 Measured, not estimated. Shakeout roster, seed 4, a complete 20-turn match on

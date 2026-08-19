@@ -196,6 +196,19 @@
   .ybar{flex:1;display:flex;align-items:flex-end;height:100%;background:#161c24;
     border-radius:2px;overflow:hidden}
   .ybar i{display:block;width:100%;border-radius:2px;min-height:2px}
+  /* Insights. A figure large enough to read at a glance and a sentence that
+     stops it being read as more than it is. */
+  .insight{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .insight:last-of-type{border-bottom:0}
+  .ifig{flex:0 0 74px;font-size:17px;font-weight:600;line-height:1.15;
+    color:var(--ink);font-variant-numeric:tabular-nums;padding-top:1px}
+  .insight.good .ifig{color:#4ade80}
+  .insight.warn .ifig{color:#fbbf24}
+  .insight.bad .ifig{color:#f87171}
+  .ibody{min-width:0}
+  .ilabel{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--dim);margin-bottom:3px}
+  .ibody p{margin:0;font-size:12px;line-height:1.5;color:var(--ink)}
   td .n{margin-left:6px;color:var(--faint);font-size:11px}
   td.hurt{color:#f87171;font-weight:600}
   .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
@@ -375,6 +388,7 @@
   <details open><summary>Reasoning<i id="n-reasoning"></i></summary><div id="reasoning"></div></details>
   <details><summary>Dossier<i id="n-dossier"></i></summary><div id="dossier"></div></details>
   <details><summary>Diplomacy<i id="n-messages"></i></summary><div id="messages"></div></details>
+  <details><summary>AI insights<i id="n-insights"></i></summary><div id="insights"></div></details>
   <details><summary>Events<i id="n-events"></i></summary><div id="events"></div></details>
   <details><summary>Signals<i id="n-signals"></i></summary><div id="signals"></div></details>
 </aside>
@@ -399,6 +413,7 @@ import { OrbitControls } from "three/OrbitControls.js";
 import {
   HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, HEX, axialToWorld,
   buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements, buildPacts,
+  buildNameplates,
   unitModel, baseGeometry, surfaceAtlas,
 } from "./world.js";
 
@@ -409,7 +424,8 @@ const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
 
 const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
             index:null, expanded:null, dossiers:{}, dossiersBefore:{}, priorTrust:{},
-            threads:null, thread:null, spend:{}, signals:{}, dossierOf:"all", combatOf:null };
+            threads:null, thread:null, spend:{}, signals:{}, world:null,
+            dossierOf:"all", combatOf:null };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
@@ -615,7 +631,7 @@ async function foldTo(turn) {
   const sig = (pid) => (signals[pid] ??= {
     said: 0, dm: 0, lostToWild: 0, sacked: 0, met: new Set(),
     fights: 0, kills: 0, losses: 0, wildFights: 0, log: [],
-    lessons: 0, commitments: 0, rivalsModelled: 0,
+    lessons: 0, commitments: 0, rivalsModelled: 0, notes: 0,
   });
   // The last view each agent expressed about each rival, whenever it expressed
   // it. Not the same as "what its dossier said last turn": agents rewrite the
@@ -623,6 +639,15 @@ async function foldTo(turn) {
   // several turns and come back revised. Diffing only against the previous turn
   // missed every one of those - which is most of them.
   const priorTrust = {};
+  // Match-wide tallies, as opposed to the per-civ ones above. Kept separate
+  // rather than summed out of `signals` at render time because combat is
+  // recorded against both participants there - summing it would report every
+  // fight twice and quietly double the one number the Insights panel leans on
+  // hardest.
+  const world = {
+    pub: 0, priv: 0, rivalFights: 0, wildFights: 0,
+    proposals: {}, signed: 0, wars: [], gone: [], firstContact: null,
+  };
   for (let t = 1; t <= turn; t++) {
     const f = await loadFrame(t);
     for (const [i, who] of Object.entries(f.owners || {})) owners[+i] = who;
@@ -637,10 +662,17 @@ async function foldTo(turn) {
         }
       }
     }
+    // `messages` carries three kinds: what a civ chose to say, and the notes
+    // attached to proposals and replies. Counting all three as "talk" inflated
+    // every seat's private total by its treaty paperwork - 585 against a real
+    // 481 in the first complete match - and made a civ that negotiated a lot
+    // look like a civ that talked a lot. The proposals are counted separately,
+    // where they mean something.
     for (const m of f.messages || []) {
       const row = sig(m.from);
+      if (m.kind && m.kind !== "message") { row.notes += 1; continue; }
       row.said += 1;
-      if (m.channel === "private") row.dm += 1;
+      if (m.channel === "private") { row.dm += 1; world.priv += 1; } else world.pub += 1;
     }
     for (const e of f.events || []) {
       if (!e.actor) continue;
@@ -651,7 +683,20 @@ async function foldTo(turn) {
       if (e.type === "unit_killed" && e.text.includes("wilderness")) row.lostToWild += 1;
       if (e.type === "city_sacked") row.sacked += 1;
 
+      // Proposals and treaties are carried as prose, not structure, so they
+      // are read the same way `first_contact` is. The type is the interesting
+      // half: four kinds are on offer and a match that only ever uses one is
+      // saying something about all four models at once.
+      if (e.type === "proposal_made") {
+        const kind = /proposed (\w+)/.exec(e.text)?.[1] || "unknown";
+        world.proposals[kind] = (world.proposals[kind] || 0) + 1;
+      }
+      if (e.type === "treaty_signed") world.signed += 1;
+      if (e.type === "war_declared") world.wars.push({ turn: t, text: e.text });
+      if (e.type === "player_eliminated") world.gone.push({ turn: t, who: e.actor });
+
       if (e.type === "first_contact") {
+        if (world.firstContact == null) world.firstContact = t;
         const other = S.match.civs.find((c) => e.text.includes(c.civ_name) && c.player_id !== e.actor);
         if (other) row.met.add(other.player_id);
       }
@@ -659,6 +704,21 @@ async function foldTo(turn) {
     // Combat, from both sides. A fight is recorded against attacker and
     // defender alike, because "who is being worn down" is the question, and a
     // civ that is only ever attacked never appears in a list keyed by actor.
+    // Fights the wilderness started. Bundles built before the engine learned to
+    // report them carry only the fights a *civ* chose to start, which in the
+    // first complete match was 28 of 103 blows - so a panel reading `combat`
+    // alone reported a quarter of the violence in the world and said nothing
+    // about the rest. The events always carried it, so they are the fallback,
+    // and a bundle that already has wilderness attacks in `combat` skips it
+    // rather than counting them twice.
+    const anyWild = (f.combat || []).some(
+      (c) => c.attacker && !S.match.civs.some((x) => x.player_id === c.attacker));
+    if (!anyWild) {
+      for (const e of f.events || []) {
+        if (e.type !== "combat_resolved") continue;
+        if (e.actor && !S.match.civs.some((x) => x.player_id === e.actor)) world.wildFights += 1;
+      }
+    }
     for (const c of f.combat || []) {
       const wild = (pid) => pid && !S.match.civs.some((x) => x.player_id === pid);
       for (const [me, them, iDied, theyDied] of [
@@ -666,6 +726,8 @@ async function foldTo(turn) {
         [c.defender, c.attacker, c.defender_died, c.attacker_died],
       ]) {
         if (wild(me) || !me) continue;
+        // Counted once per fight, from the attacker's side only.
+        if (me === c.attacker) (wild(them) ? world.wildFights++ : world.rivalFights++);
         const row = sig(me);
         row.fights += 1;
         if (wild(them)) row.wildFights += 1;
@@ -708,7 +770,7 @@ async function foldTo(turn) {
       row.rivalsModelled = (d.opponent_models || []).length;
     }
   }
-  return { owners, explored, dossiers, before, priorTrust, spend, signals };
+  return { owners, explored, dossiers, before, priorTrust, spend, signals, world };
 }
 
 // --- rendering -------------------------------------------------------------
@@ -762,9 +824,10 @@ async function drawTurn() {
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
-  const { owners, explored, dossiers, before, priorTrust, spend, signals } = await foldTo(S.turn);
+  const { owners, explored, dossiers, before, priorTrust, spend, signals, world } = await foldTo(S.turn);
   S.spend = spend;
   S.signals = signals;
+  S.world = world;
   S.dossiers = dossiers;
   S.dossiersBefore = before;
   S.priorTrust = priorTrust;
@@ -791,6 +854,15 @@ async function drawTurn() {
   // wonder. Walls take their own baked colours; only the roofs carry the civ.
   const cities = f.cities.filter((c) => !lit || lit.has(c.at));
   dynamicLayer.add(buildSettlements(cities, (tile) => {
+    const [x, , z] = at(tile);
+    return [x, topOf(tile), z];
+  }, hexOf));
+
+  // Who each colour *is*, said on the board rather than only in the panels.
+  // Fog applies for free: `cities` is already filtered to what this seat can
+  // see, so in agent mode a rival's nameplate appears when you find their town
+  // and not before - which is the same rule the borders and units follow.
+  dynamicLayer.add(buildNameplates(cities, nameOf, (tile) => {
     const [x, , z] = at(tile);
     return [x, topOf(tile), z];
   }, hexOf));
@@ -1143,6 +1215,130 @@ function badge(id, value, hot = false) {
   el.className = hot ? "hot" : "";
 }
 
+/**
+ * Insights: the handful of things about this match that are worth saying out
+ * loud, stated as of the turn you are looking at.
+ *
+ * Every other panel answers "what is true right now". This one answers "what is
+ * strange about what has happened so far", which is a different job and the one
+ * the whole experiment exists for. The findings that survived the first
+ * complete match were all of this shape - not a number anybody asked for, but a
+ * ratio that turned out lopsided: six times more violence against wolves than
+ * against each other, seven private messages for every public one, fifty-two
+ * treaties that were all the same treaty.
+ *
+ * Two rules, both learned the hard way elsewhere in this project:
+ *
+ * A card only appears when the evidence for it exists. An insight computed from
+ * three data points is a coin toss wearing a headline, and the panel would be
+ * at its most confident on turn 2 when it knows almost nothing.
+ *
+ * A card states what happened, not what it means about a model. "They have not
+ * declared war" is an observation. "They are peaceful" is a claim about four
+ * language models that this bundle cannot support, and the difference matters
+ * more here than anywhere else in the viewer.
+ */
+function insights() {
+  const w = S.world;
+  if (!w) return `<div class="empty">Nothing to read yet.</div>`;
+  const cards = [];
+  const turn = S.turn;
+
+  // --- how long they went without declaring war ----------------------------
+  if (turn >= 10) {
+    const first = w.wars[0];
+    const quiet = first ? first.turn - 1 : turn;
+    const pct = Math.round(100 * quiet / turn);
+    cards.push(card(
+      first ? `turn ${first.turn}` : `${turn} turns`,
+      first ? "first declaration of war" : "and nobody has declared war",
+      first
+        ? `${quiet} turns passed before the first declaration - ${pct}% of the match
+           to this point. ${esc(first.text)}.`
+        : `Every civ can declare war on any turn at no cost, and none has.
+           Whether that is caution, an oversight, or a read of the odds is the
+           question; the fact is just that the option has gone unused.`,
+      first ? "" : "good"));
+  }
+
+  // --- who they actually fight ---------------------------------------------
+  const fights = w.rivalFights + w.wildFights;
+  if (fights >= 8) {
+    const ratio = w.rivalFights ? (w.wildFights / w.rivalFights) : Infinity;
+    cards.push(card(
+      w.rivalFights ? `${ratio.toFixed(1)}x` : `${w.wildFights}-0`,
+      "more fighting with the map than each other",
+      `${w.wildFights} fights involved wolves or barbarians, ${w.rivalFights}
+       were civ against civ. The wilderness is neutral and attacks everyone, so
+       it is the one opponent nobody has to choose - which makes the other
+       number the interesting one.`));
+  }
+
+  // --- public voice against private voice ----------------------------------
+  const talk = w.pub + w.priv;
+  if (talk >= 20) {
+    const ratio = w.pub ? (w.priv / w.pub) : Infinity;
+    cards.push(card(
+      w.pub ? `${ratio.toFixed(1)} : 1` : `${w.priv} : 0`,
+      "private messages for every public one",
+      `${w.priv} direct messages against ${w.pub} broadcasts. Both cost the same
+       and reach different audiences, so the split is a choice. Whether the two
+       voices say the same thing is answerable in the Diplomacy panel, one
+       thread at a time.`));
+  }
+
+  // --- what they ask each other for ----------------------------------------
+  const kinds = Object.entries(w.proposals).sort((a, b) => b[1] - a[1]);
+  const made = kinds.reduce((a, [, n]) => a + n, 0);
+  if (made >= 5) {
+    const [top, topN] = kinds[0];
+    const only = kinds.length === 1;
+    const rate = made ? Math.round(100 * w.signed / made) : 0;
+    cards.push(card(
+      only ? `${made} of ${made}` : `${topN} of ${made}`,
+      `proposals were ${esc(String(top).replace(/_/g, " "))}`,
+      only
+        ? `Five kinds of agreement are available - peace, ceasefire,
+           non-aggression, alliance, and trade in gold or technology - and only
+           this one has ever been proposed. ${rate}% were accepted.`
+        : `${kinds.map(([k, n]) => `${n} ${esc(String(k).replace(/_/g, " "))}`).join(", ")}.
+           ${rate}% of proposals were accepted.`,
+      only ? "warn" : ""));
+  }
+
+  // --- who is gone, and to what --------------------------------------------
+  for (const g of w.gone) {
+    const civ = civOf(g.who);
+    const row = S.signals?.[g.who] || {};
+    const toWild = (row.lostToWild || 0) + (row.sacked || 0);
+    const byRival = (row.fights || 0) - (row.wildFights || 0);
+    cards.push(card(
+      `turn ${g.turn}`,
+      `${esc(civ?.model || civ?.civ_name || g.who)} was eliminated`,
+      `It lost ${row.lostToWild || 0} units and ${row.sacked || 0} cities to the
+       wilderness, and fought ${byRival} times against a rival. When the first
+       number dwarfs the second, the map removed that civ rather than its
+       opponents did.`,
+      "bad"));
+  }
+
+  if (!cards.length) {
+    return `<div class="empty">Too early to say anything worth saying. Insights
+      appear once there is enough of a match to draw them from.</div>`;
+  }
+  return cards.join("") + `<div class="tick">Every figure is as of turn ${turn},
+    not the whole match - scrub back and a finding can disappear, which is the
+    honest behaviour for something calling itself an insight.</div>`;
+}
+
+/** One finding: a figure, what it counts, and the sentence that qualifies it. */
+function card(figure, label, body, tone = "") {
+  return `<div class="insight ${tone}">
+    <div class="ifig">${figure}</div>
+    <div class="ibody"><div class="ilabel">${label}</div>
+      <p>${body}</p></div></div>`;
+}
+
 function panels() {
   const f = S.frame, e = f.economy;
   const sign = (n) => (n ? `<span class="${n<0?"neg":"pos"}">${n>0?"+":""}${n}</span>` : "");
@@ -1316,6 +1512,9 @@ function panels() {
       || m.from === S.focus || m.to === S.focus
   ).length;
   badge("economy", S.match.civs.length);
+  const found = insights();
+  $("insights").innerHTML = found;
+  badge("insights", (found.match(/class="insight /g) || []).length);
   badge("cost", Object.keys(S.spend || {}).length);
   badge("reasoning", thinkers.length);
   badge("dossier", dossierCount.label, dossierCount.hot);
