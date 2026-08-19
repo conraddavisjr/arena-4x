@@ -38,6 +38,7 @@ from typing import Any
 from .base import (
     FatalProviderError,
     Malformed,
+    OutOfCredits,
     Overloaded,
     ProviderError,
     RateLimited,
@@ -171,6 +172,8 @@ class OpenAIClient:
             latency_ms=latency_ms,
             stop_reason=getattr(response, "status", None),
             thinking=_reasoning_of(response),
+            effort=self._reasoning_effort,
+            effort_sent=self._reasoning_effort,
         )
 
     async def aclose(self) -> None:
@@ -274,6 +277,8 @@ class XAIClient:
             # extension riding a shared schema - so it is read by name and
             # tolerated absent rather than declared.
             thinking=getattr(choice.message, "reasoning_content", None) or None,
+            effort=self._reasoning_effort,
+            effort_sent=self._reasoning_effort,
         )
 
     async def aclose(self) -> None:
@@ -345,6 +350,11 @@ def _completions_usage(raw: Any) -> Usage:
 def _translate(error: Exception, sdk: Any, provider: str) -> ProviderError:
     if isinstance(error, ProviderError):
         return error
+    # Before anything else, including the 429 path: an exhausted account
+    # often arrives *as* a rate limit, and retrying it burns the ladder on a
+    # condition that cannot improve.
+    if OutOfCredits.matches(str(error)):
+        return OutOfCredits(str(error), provider=provider)
     if isinstance(error, sdk.RateLimitError):
         headers = getattr(getattr(error, "response", None), "headers", None) or {}
         try:

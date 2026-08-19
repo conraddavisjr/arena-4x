@@ -136,6 +136,11 @@
   .bars i.wild{background:#a855f7}
   .bars i.pub{background:#4ade80}
   .bars i.dm{background:#f472b6}
+  /* A seat that just changed how hard it is thinking. Same green as every other
+     "this moved on this turn" mark in the panel - the dossier's edited badge,
+     the live thread ring - so the eye learns one colour rather than three. */
+  td.moved{color:#4ade80;font-weight:600}
+  td.moved .arrow-up{font-size:8px;margin-left:3px;vertical-align:top}
   td .n{margin-left:6px;color:var(--faint);font-size:11px}
   td.hurt{color:#f87171;font-weight:600}
   .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
@@ -537,6 +542,15 @@ async function foldTo(turn) {
       const acc = (spend[pid] ??= { usd: 0, input: 0, output: 0, cached: 0, ms: 0, turns: 0 });
       for (const k of ["usd", "input", "output", "cached", "ms"]) acc[k] += row[k] || 0;
       acc.turns += 1;
+      // Effort is a per-turn fact, not a running total, so it is carried rather
+      // than summed - and the previous turn's value is kept beside it, because
+      // the interesting thing is not what a seat is thinking at but the turn it
+      // decided to change.
+      if (row.effort != null) {
+        acc.effortBefore = acc.effort ?? null;
+        acc.effort = row.effort;
+        acc.effortSent = row.effort_sent || row.effort;
+      }
     }
     before = dossiers;
     dossiers = { ...dossiers, ...(f.dossiers || {}) };
@@ -733,6 +747,29 @@ function dossierPick(ev) {
   panels();
 }
 
+/**
+ * How hard a seat was told to think this turn, and whether that just changed.
+ *
+ * Nothing recorded this until now, which is why one seat played every match of
+ * this project with reasoning off while the seat beside it was set to `high` -
+ * the artifacts simply could not answer "were all four asked the same question".
+ * Under fixed effort this column is the proof of parity. Under self-selected
+ * effort it stops being configuration and becomes a move, and the turn a model
+ * decides to think harder is then one of the more interesting events in a match.
+ */
+function effortCell(s) {
+  if (!s.effort) return `<td class="meta">—</td>`;
+  // A change is marked, not merely implied by the value differing from a row you
+  // would have to scroll back to. `effortBefore` is null on a seat's first turn,
+  // which is not a change - it is the start.
+  const moved = s.effortBefore != null && s.effortBefore !== s.effort;
+  const detail = s.effortSent && s.effortSent !== s.effort
+    ? `${esc(s.effort)} — sent as ${esc(s.effortSent)}` : esc(s.effort);
+  return `<td title="${moved ? `changed from ${esc(s.effortBefore)}. ` : ""}${detail}"
+    class="${moved ? "moved" : ""}">${esc(s.effort)}${
+    moved ? `<span class="arrow-up">▲</span>` : ""}</td>`;
+}
+
 /** The count beside a collapsed section heading. */
 function badge(id, value, hot = false) {
   const el = $(`n-${id}`);
@@ -772,6 +809,7 @@ function panels() {
       <th title="Output tokens produced, including reasoning tokens where the vendor bills them as output. This is the expensive half: output runs about five times the price of input.">out tok</th>
       <th title="Share of input tokens served from cache at roughly a tenth the price. The system prompt is identical every turn, so a healthy number here is large. Zero is worth investigating on a vendor with an explicit cache breakpoint.">cache</th>
       <th title="Median wall-clock seconds per turn. Turns resolve simultaneously, so the slowest seat sets the pace of the whole match.">s/turn</th>
+      <th title="How hard this seat was told to think on this turn. Shown every turn rather than only when it moves, so a steady seat reads as deliberate rather than as missing data. A green mark means it changed from the turn before. Hover the value for the vendor's own form of it - the four do not share an instrument, so 'medium' is an enum on some seats and a token budget on others.">effort</th>
       <th title="Score gained per 100,000 tokens spent. The efficiency figure: it compares a cheap model playing adequately against an expensive one playing slightly better, and a leaderboard by this can invert a leaderboard by score.">per 100k</th>
       </tr></thead><tbody>${
       totals.map(({ c, s }) => {
@@ -797,7 +835,9 @@ function panels() {
             "implicit caching does not engage below roughly 17k tokens and our prefix " +
             "is 2.2k, where the whole saving would be about 18 cents a match."
             }">${cachePct}%</td>
-          <td>${(s.ms / s.turns / 1000).toFixed(0)}</td><td>${per.toFixed(0)}</td></tr>`;
+          <td>${(s.ms / s.turns / 1000).toFixed(0)}</td>
+          ${effortCell(s)}
+          <td>${per.toFixed(0)}</td></tr>`;
       }).join("")}</tbody></table>
     <div class="tick" style="margin-top:6px">$${grand.toFixed(3)} through turn ${S.turn}
       · ${(grand / S.turn * S.match.turn_limit).toFixed(2)} projected at the cap</div>`;

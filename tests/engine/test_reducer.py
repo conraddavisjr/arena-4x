@@ -545,7 +545,19 @@ def test_truncation_protects_the_assessments_and_the_plan() -> None:
 
 
 def test_cities_grow_and_produce_over_time() -> None:
-    state = fresh()
+    """A claim about the economy, so the wilderness is turned off for it.
+
+    It is not a claim about wolves. Left at the default it passed on seed 42 and
+    failed the moment the wildlife density changed - not because growth broke,
+    but because a different RNG trajectory put raiders somewhere else. Measured
+    on seed 4 the effect ran the *other* way, pop 8 at low density against pop 1
+    at high, which is the tell that the test was reading a trajectory rather
+    than an invariant.
+
+    Isolating the mechanic under test is the fix. Wildlife pressure on cities is
+    real and worth testing, and belongs in a test that says so.
+    """
+    state = fresh(wilderness=0.0)
     settler = settler_of(state, "p1")
     actions = passes()
     actions["p1"] = Action(

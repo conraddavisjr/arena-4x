@@ -10,12 +10,22 @@ match, which is not.
 **Illegal orders are not this module's problem.** The engine validates every
 order against the live rules and drops the illegal ones individually with an
 `order_rejected` event, so a turn where three of five orders are nonsense still
-applies the other two. That is better than the repair loop the design called
-for: it costs no extra request, it degrades gracefully instead of
-all-or-nothing, and the rejections come back to the agent in next turn's
-`recent_events`, which is a cleaner teaching signal than a mid-turn correction
-it never sees again. What *is* repaired here is a body that fails the schema,
-because that is a turn with no orders at all.
+applies the other two. It costs no extra request, it degrades gracefully instead
+of all-or-nothing, and the rejections come back to the agent in next turn's
+`recent_events`.
+
+**Unusable orders are.** An order that never reaches the engine - `found_city`
+with no unit and no name - gets no `order_rejected`, because the reducer never
+sees it. `actions.parse` discards it, and for a long time that was the end of
+it: no event, no failure, nothing in any log. From outside, a model issuing
+nothing but unusable orders is indistinguishable from a model choosing to do
+nothing. `claude-haiku-4-5` spent 91% of its orders that way across a 128-turn
+match, founded no cities, and was eliminated on turn 35 with every turn recorded
+as a success.
+
+So a discard now buys one correction naming the missing fields. This is the only
+repair loop here that exists for *semantics* rather than for a malformed body,
+and it exists because the silent version cost a civilisation.
 """
 
 from __future__ import annotations
@@ -30,9 +40,9 @@ from typing import Any
 from pydantic import ValidationError
 
 from arena_engine import rules
-from arena_engine.actions import Action, parse, pass_turn
+from arena_engine.actions import Action, parse_reporting_drops, pass_turn, why_unusable
 
-from .providers.base import LLMClient, ProviderError, Turn
+from .providers.base import LLMClient, OutOfCredits, ProviderError, Turn
 from .resilience import CircuitBreaker, RetryPolicy, Sleeper, TokenBucket, with_retry
 
 # Two attempts total, and the second one is worth having: a schema violation is
@@ -97,6 +107,15 @@ class Agent:
             return await asyncio.wait_for(self._attempt(user), timeout=self.timeout_s)
         except TimeoutError:
             return Outcome(action=pass_turn(), failure=f"timeout after {self.timeout_s:.0f}s")
+        except OutOfCredits:
+            # The one failure this method does not absorb. "An agent that cannot
+            # answer passes its turn" is the right policy for a vendor having a
+            # bad ten minutes, and the wrong one for an account that cannot pay:
+            # that will not recover inside the run, so passing turns quietly
+            # converts a billing problem into a corrupted result. Measured - a
+            # 300-turn baseline played 29 further turns with one civ holding
+            # cities and issuing no orders. Raised so the loop can halt.
+            raise
         except ProviderError as error:
             return Outcome(action=pass_turn(), failure=f"{type(error).__name__}: {error}")
 
@@ -123,7 +142,7 @@ class Agent:
                 # vendors get is a flattened union, so a body can arrive
                 # carrying fields that belong to a different order type. Those
                 # are trimmed; anything genuinely wrong still raises here.
-                action = parse(turn.text)
+                action, dropped = parse_reporting_drops(turn.text)
             except (ValidationError, json.JSONDecodeError, ValueError) as error:
                 last_error = str(error)[:800]
                 # The correction goes in the *user* turn. An assistant-turn
@@ -133,6 +152,28 @@ class Agent:
                     f"{user}\n\nYour previous response could not be used. "
                     f"It failed validation with:\n{last_error}\n"
                     f"Return a corrected object matching the schema exactly."
+                )
+                continue
+
+            # An entry that could not be used is worth one correction, not a
+            # silent discard. A `found_city` with no unit is unrepairable here -
+            # nothing can invent the unit - but the model can repair it, and
+            # until this existed nobody ever told it. One seat spent 91% of its
+            # orders this way across a whole match and was eliminated on turn 35
+            # while every log said the turn had succeeded.
+            #
+            # Only worth a round trip while an attempt remains and something
+            # survived being asked; a model that returns nothing usable twice is
+            # answered by the pass below.
+            if dropped and attempt < MAX_PARSE_ATTEMPTS - 1:
+                faults = "; ".join(why_unusable(d) for d in dropped[:4])
+                last_error = f"{len(dropped)} order(s) discarded - {faults}"
+                prompt = (
+                    f"{user}\n\nYour previous response was accepted but "
+                    f"{len(dropped)} of your entries could not be used and were "
+                    f"discarded: {faults}. Those actions did not happen. Reissue "
+                    f"them with every field they require, and keep the rest of "
+                    f"your turn as it was."
                 )
                 continue
 

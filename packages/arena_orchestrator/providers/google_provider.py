@@ -36,6 +36,7 @@ from typing import Any
 from .base import (
     FatalProviderError,
     Malformed,
+    OutOfCredits,
     Overloaded,
     ProviderError,
     RateLimited,
@@ -137,6 +138,8 @@ class GoogleClient:
             latency_ms=latency_ms,
             stop_reason=status,
             thinking=_thoughts(response),
+            effort=self._effort,
+            effort_sent=f"thinking_level={self._effort.upper()}",
         )
 
     async def aclose(self) -> None:
@@ -204,6 +207,12 @@ def _translate(error: Exception, provider: str) -> ProviderError:
     """
     if isinstance(error, ProviderError):
         return error
+    # Before the status check, and that ordering is the whole point here: this
+    # vendor reports an exhausted account as a **429**, so classifying by status
+    # alone makes it `RateLimited` - retryable - and the match spins the ladder
+    # on a condition that cannot improve instead of halting.
+    if OutOfCredits.matches(str(error)):
+        return OutOfCredits(str(error), provider=provider)
     status = getattr(error, "code", None) or getattr(error, "status_code", 0)
     try:
         status = int(status)

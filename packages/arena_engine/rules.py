@@ -219,6 +219,18 @@ turn. There is no instant negotiation.
 - **Score** - if the turn limit is reached, the highest score wins. Score counts
   cities, population, techs, military and culture, with cities weighted most.
 
+**Any of these ends the match immediately, for everyone.** There is no second
+place. If a rival completes the `{APEX_PROJECT}`, the game is over on that turn
+and you have lost it, however many cities you hold and whatever your score.
+
+`victory_progress.science_race` shows how close **every** civilisation is,
+yourself included, ranked by who is nearest. That standing is not fogged - like
+a wonder, research is a public fact - so nobody can be surprised by it, and
+nobody has the excuse of not having looked. A civ holding `{APEX_TECH}` is one
+build away from ending the match. Treat it accordingly: a rival at 90% is a more
+urgent problem than a rival with a large army, because an army can be defended
+against and a finished wonder cannot be undone.
+
 ## Cities
 
 Found with a settler on settleable terrain, at least {MIN_CITY_SPACING} hexes
@@ -286,6 +298,32 @@ so anything you will want in twenty turns has to be in here.
 Keep it under about two thousand tokens. If it runs over, the engine trims
 lessons first and then commitments; your doctrine and your opponent models are
 never trimmed, because they are the expensive ones to rebuild.
+
+## Your token budget
+
+Present only when the match is run with an allowance. If your observation has no
+`budget` block, there is no limit and you can ignore this section entirely.
+
+When it is present, `budget` is a real constraint on you and not a status
+readout:
+
+- Every token you *produce* draws on it - your reasoning as well as your
+  answer. Thinking longer costs you allowance in exactly the way writing longer
+  does. What you are shown costs you nothing, so the size of the board is not
+  your problem.
+- It is for the whole match and is never replenished. `tokens_remaining` against
+  `match_pct_elapsed` tells you whether you are on pace.
+- **At zero you stop acting.** You keep your cities, your units and your
+  territory, and you go on being attacked, traded with and lied to - you simply
+  issue no further orders for the rest of the match. Running out is not a
+  disqualification, it is a slow defeat you chose.
+
+So it is a resource like gold, and it trades against the others. Deliberating
+carefully over a war you are about to lose may be worth it; deliberating
+carefully over which tile a worker improves on turn 40 is probably not. Spending
+it evenly is one strategy, front-loading a strong opening is another, and
+holding reserve for a late crisis is a third. None of them is the intended
+answer.
 
 ## Terrain
 

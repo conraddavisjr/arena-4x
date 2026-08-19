@@ -72,7 +72,10 @@ def test_orders_are_flattened_strictly() -> None:
     orders = for_provider(SCHEMA, "anthropic")["properties"]["orders"]["items"]
     assert orders["required"] == sorted(orders["properties"])
     assert "unit_id" in orders["required"]
-    assert {"type": "null"} in orders["properties"]["unit_id"]["anyOf"]
+    # Nullable, but in the compact encoding - an `anyOf` wrapper costs 19 bytes
+    # a field over a type array, and this schema has spent a long time over its
+    # budget.
+    assert orders["properties"]["unit_id"]["type"] == ["string", "null"]
     # The per-branch requirements cannot survive the merge structurally, so they
     # are carried as prose.
     assert "found_city requires name, unit_id" in orders["description"]
@@ -206,3 +209,82 @@ def test_a_body_that_is_not_json_still_raises() -> None:
         parse("not json at all")
     with pytest.raises(ValidationError):
         parse('{"reasoning": "should be an object"}')
+
+
+# ---------------------------------------------------------------------------
+# Thinking costs grammar headroom
+# ---------------------------------------------------------------------------
+
+
+def test_every_anthropic_model_keeps_strict_order_enforcement() -> None:
+    """The guarantee that must not be traded away again.
+
+    It was, once. To fit extended thinking inside the grammar budget, pre-4.6
+    models were given a variant where only `action` was required and the field
+    requirements were demoted to prose. `claude-haiku-4-5` then answered
+    `{"action": "found_city"}` with no unit and no name - 91% of its orders
+    malformed against 0% on every other seat, because it was the only seat whose
+    schema had stopped enforcing them. It could not found cities, lost the one it
+    had, and was eliminated on turn 35 of a 128-turn match.
+
+    Structured output works because the decoder enforces the shape. A
+    description saying `found_city requires name, unit_id` is a suggestion, and
+    this model did not take it.
+    """
+    for model in ("claude-haiku-4-5", "claude-opus-5", "claude-sonnet-5", None):
+        orders = for_provider(SCHEMA, "anthropic", model)["properties"]["orders"]["items"]
+        assert "unit_id" in orders["required"], f"{model} lost order enforcement"
+        assert len(orders["required"]) > 1, f"{model} requires only {orders['required']}"
+
+
+def test_thinking_is_the_thing_given_up_instead() -> None:
+    """A seat that reasons but cannot act is worth nothing; a seat that acts
+    without a visible trace is worth a great deal. Only pre-4.6 pays this."""
+    from arena_orchestrator.dialects import cannot_think_with_schema
+
+    assert cannot_think_with_schema("claude-haiku-4-5")
+    assert not cannot_think_with_schema("claude-opus-5")
+    assert not cannot_think_with_schema("claude-sonnet-5")
+
+
+def test_titles_are_stripped_because_a_grammar_never_reads_them() -> None:
+    """830 bytes of "City Id" and "Tax Pct" restating keys the model can see.
+
+    Twice the budget that was missing when this whole problem started, sitting
+    unclaimed in the schema the entire time. It does not solve the ceiling -
+    that turned out to be total grammar complexity rather than bytes - but it is
+    free headroom for every Anthropic seat.
+    """
+    dialect = for_provider(SCHEMA, "anthropic", "claude-opus-5")
+    assert '"title"' not in json.dumps(dialect)
+    assert len(json.dumps(dialect)) < len(json.dumps(SCHEMA))
+
+
+def test_nullable_fields_are_encoded_compactly_and_correctly() -> None:
+    """`{"type": ["string","null"]}` over an `anyOf` wrapper - 19 bytes a field.
+
+    The enum case has to come first, and getting it backwards produces
+    `{"enum": ["farm","mine","road"], "type": ["string","null"]}`, which
+    announces that null is allowed and forbids it two keys later.
+    """
+    from arena_orchestrator.dialects import nullable
+
+    assert nullable({"type": "string"}) == {"type": ["string", "null"]}
+    assert nullable({"enum": ["farm", "mine"], "type": "string"}) == {
+        "enum": ["farm", "mine", None]
+    }
+    # Anything it cannot compact keeps the wrapper rather than being mangled.
+    assert nullable({"$ref": "#/$defs/X"}) == {"anyOf": [{"$ref": "#/$defs/X"}, {"type": "null"}]}
+
+    orders = for_provider(SCHEMA, "anthropic", "claude-opus-5")["properties"]["orders"]["items"]
+    for name, spec in orders["properties"].items():
+        if name == "action":
+            continue
+        accepts_null = "null" in (spec.get("type") or []) or None in (spec.get("enum") or [])
+        assert accepts_null or "anyOf" in spec, f"{name} is required but cannot be null"
+
+
+def test_other_vendors_are_unaffected_by_the_model() -> None:
+    for model in ("gpt-5.4-mini", "grok-4.3", "gemini-3.6-flash"):
+        for provider in ("openai", "xai", "google"):
+            assert for_provider(SCHEMA, provider, model) == SCHEMA

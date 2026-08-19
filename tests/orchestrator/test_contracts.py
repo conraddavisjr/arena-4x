@@ -115,10 +115,13 @@ async def test_the_real_action_schema_is_accepted(provider: str) -> None:
     base = json.loads(
         (Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json").read_text()
     )
-    # Through the dialect, exactly as the loop sends it. Testing the base schema
-    # here would be testing something no match ever transmits.
-    schema = for_provider(base, provider)
+    # Through the dialect, exactly as the loop sends it, *including the model*.
+    # The dialect is model-aware: a pre-4.6 Anthropic model cannot take the
+    # strict variant once thinking is on, and passing only the provider here
+    # rebuilt a schema the loop would never send - so this test 400'd on a
+    # request shape that does not exist in production.
     client = build(provider)
+    schema = for_provider(base, provider, client.model)
     try:
         turn = await client.complete(
             "You are the sovereign of a small civilisation. It is turn 1.",
@@ -189,6 +192,7 @@ async def test_anthropic_actually_caches_the_system_prefix(model: str) -> None:
                 (Path(__file__).resolve().parents[2] / "schemas" / "action.schema.json").read_text()
             ),
             "anthropic",
+            client.model,
         )
         first = await client.complete(system, f"Turn 1. {board}", schema)
         second = await client.complete(system, f"Turn 2. {board} Now name a rival.", schema)

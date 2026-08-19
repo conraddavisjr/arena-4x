@@ -101,6 +101,19 @@ class Turn:
     # which is the account a model writes knowing it will be read - this is the
     # deliberation behind that account.
     thinking: str | None = None
+    # What this seat was actually asked for, as the adapter sent it. Recorded
+    # because nothing recorded it, and so "were all four asked the same question
+    # this turn" was unanswerable from the artifacts - which is exactly how one
+    # seat came to play every match of this project with reasoning off while the
+    # seat beside it was set to `high`.
+    #
+    # Two fields, because the vendors do not share an instrument. `effort` is the
+    # match-level intent every seat gets; `effort_sent` is the vendor form, which
+    # for a pre-4.6 Anthropic model is a token budget rather than an enum. Under
+    # self-selected effort this stops being configuration and becomes a move, and
+    # then the difference between the two is worth being able to read.
+    effort: str | None = None
+    effort_sent: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -231,6 +244,57 @@ class Refused(ProviderError):
 
 class FatalProviderError(ProviderError):
     """Bad key, bad model id, malformed request. Retrying cannot help."""
+
+
+class OutOfCredits(FatalProviderError):
+    """The account cannot pay. Distinguished because it ends the *match*.
+
+    Every other failure here is survivable by design: an agent that cannot
+    answer passes its turn, plays badly, and the match continues - which is the
+    right response to a vendor having a bad ten minutes.
+
+    An exhausted account is not that. It will not recover inside the run, so the
+    "keep going" policy turns one problem into a slow corruption of the result.
+    Measured: a 300-turn baseline ran 29 further turns after one seat's credits
+    ran out, with that civ holding its cities and issuing no orders, on its way
+    to producing a four-way comparison missing a fourth. It cost about six hours
+    and would have cost eighteen dollars more.
+
+    So this halts the match the way the budget cap does: on a coherent board,
+    scored, with a reason recorded. One lost turn instead of two hundred and
+    sixty.
+    """
+
+    # Recognised by message, because none of the four vendors gives this its own
+    # status code or error type - it arrives as a 400 or a 429 whose body
+    # happens to mention money. Matching on prose is fragile and is the only
+    # option; a miss costs the old behaviour rather than a crash.
+    # Every phrase here was observed on a live account, not guessed. Google's
+    # wording was missed by the first version of this list and arrived as a
+    # *429* - so it was classified `RateLimited`, which is retryable, which
+    # means the ladder would have spun on a condition that cannot improve and
+    # the match would have limped instead of halting. Found by the model-action
+    # suite rather than by a run, which is the cheap way round.
+    #
+    # Deliberately specific. Matching "quota" or "billing" alone would catch
+    # ordinary rate limits and halt a multi-day match over a bad ten minutes,
+    # which is the failure this class exists to avoid causing.
+    MARKERS = (
+        "no credits remaining",
+        "credit balance is too low",
+        "insufficient_quota",
+        "insufficient credits",
+        "credits are depleted",
+        "prepayment credits",
+        "exceeded your current quota",
+        "billing hard limit",
+        "quota exceeded",
+    )
+
+    @classmethod
+    def matches(cls, message: str) -> bool:
+        low = message.lower()
+        return any(marker in low for marker in cls.MARKERS)
 
 
 async def unstalled(

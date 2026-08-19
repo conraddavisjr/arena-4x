@@ -202,6 +202,175 @@ Even so it cannot discriminate the two placements through the streaming path -
 three attempts failed - so placement is guarded by an offline assertion on the
 request shape and by a runtime `cache_miss` journal record instead.
 
+### The rate card was wrong for eight of ten entries, and said so
+
+Every match reported roughly **half** its true cost. `llm-run-2` was billed as
+$1.18 and actually cost $2.36. Which means the $75 safety halt - the one number
+the whole budget system exists to enforce - was in practice a $150 halt.
+
+| model | card | vendor |
+|---|---|---|
+| `grok-4.3` | 0.20 / 0.50 | **1.25 / 2.50** |
+| `gpt-5.6` | 1.25 / 10.00 | **5.00 / 30.00** |
+| `gpt-5.4-mini` | 0.25 / 2.00 | **0.75 / 4.50** |
+| `gemini-3.6-flash` | 0.30 / 2.50 | **0.75 / 3.75** |
+| `gemini-3.5-flash-lite` | 0.10 / 0.40 | **0.30 / 2.50** |
+| `claude-sonnet-5` | 3.00 / 15.00 | **2.00 / 10.00** |
+
+**The file predicted this exactly.** It carried a comment saying most of its
+rates were the figures the roster was costed against and "should be re-checked
+before a flagship run". That was accurate, and it was ignored - by me, while
+quoting the numbers to two decimal places in a roster recommendation built on
+them. A warning that names its own failure mode is not a control.
+
+So provenance is per entry now: each rate cites the vendor URL it came from and
+the date it was read, `make prices` prints the card for re-checking, and the
+suite fails once any entry passes 90 days. The two entries the old card got
+right were exactly the two its comment vouched for, which is the whole argument
+for the change.
+
+`rebuild_bundle` also stopped trusting the stored dollar figure. Tokens are a
+measurement and cannot go stale; money is derived. Correcting a rate now
+reprices history by rebuilding, instead of carrying the error into an artifact
+somebody reads later.
+
+**Two things worth knowing beyond the numbers.** Sonnet 5 was wrong by being too
+*high* - its introductory pricing was made permanent - so rates rot in both
+directions. And Claude 4.7+ models use a tokenizer producing ~30% more tokens
+for the same text, which means per-token price comparisons understate them by
+about a third. No sticker-price table settles a cost question; only measured
+spend does.
+
+*Postscript on how this surfaced.* Another model challenged the table and was
+right that it was wrong, and right on three of four prices - while being wrong
+about the cause (it argued a decimal shift; the arithmetic was correct on stale
+inputs) and wrong about its own vendor's model, quoting flash-lite at
+$0.54/$4.50 against a real $0.30/$2.50. Both of us were confidently wrong about
+something. The vendor pages settled it in four fetches.
+
+### A dead seat is not a slow seat, and the loop could not tell
+
+A 300-turn baseline reached turn 40, one seat's API credits ran out, and it
+played **29 further turns with that civ holding its cities and issuing no
+orders** - on its way to producing a four-way comparison missing a fourth. Six
+hours of wall clock and about eighteen more dollars, had it finished.
+
+Every piece of software involved behaved exactly as designed. "An agent that
+cannot answer passes its turn, and the match continues" is the right policy for
+a vendor having a bad ten minutes, and precisely the wrong one for an account
+that cannot pay: that does not recover inside the run, so the fallback quietly
+converts a billing problem into a corrupted result. The circuit breaker even
+opened, correctly, and the match went on regardless.
+
+Two changes, and the second matters more than the first:
+
+- **`make preflight`** probes every seat with one tiny call before anything
+  unattended, and `run_match` runs it automatically. It probes rather than
+  reading a balance because no vendor here exposes one on a normal key - but
+  every one of them will tell you immediately that you cannot spend, which is
+  the answerable version of the question. It also prints the projected spend per
+  seat, so the number you compare against a billing page is not a guess.
+- **`OutOfCredits` halts the match**, the way the budget cap does: on a coherent
+  board, scored, with `reason: "provider_credits"`. One lost turn instead of two
+  hundred and sixty. It is matched on message text, because not one of the four
+  vendors gives this its own status code or error type - it arrives as a 400 or
+  a 429 whose body happens to mention money.
+
+The general lesson is about fallbacks rather than billing. **A graceful
+degradation that cannot distinguish transient from permanent will eventually
+degrade gracefully for a very long time.** Tests now pin both directions: an
+outage must not end a match, and an exhausted account must.
+
+*Aside:* the preflight's first version had no retry, so a single transient stall
+failed it on an account that was fine - the check was less resilient than the
+thing it checked. It uses the same retry ladder now.
+
+### Trading order enforcement for reasoning eliminated a civilisation
+
+The most expensive mistake in the project, and it was mine, in a change I made
+with the risk written into the comment beside it.
+
+`claude-haiku-4-5` cannot have both extended thinking and the strict action
+schema. I resolved that by loosening `orders` so only `action` was required and
+demoting the field requirements to prose. The next 128-turn match:
+
+| seat | orders sent | malformed | dropped |
+|---|---|---|---|
+| `claude-haiku-4-5` | 116 | 106 | **91%** |
+| `gpt-5.4-mini` | 1037 | 0 | 0% |
+| `gemini-3.6-flash` | 1636 | 5 | 0% |
+| `grok-4.3` | 5570 | 0 | 0% |
+
+It answered `{"action": "found_city"}` with no unit and no name, over and over,
+across every order type - 35 malformed `move_unit`, 20 `found_city`, 17
+`set_research`. Those entries are unusable, so `actions.parse` drops them. It
+could not found cities, lost the one it had, **and was eliminated on turn 35**,
+leaving a three-way match for the remaining 93 turns.
+
+The prose was present and correct - `found_city requires name, unit_id` - and
+the model ignored it 91% of the time. **Structured output works because the
+decoder enforces the shape.** A description is a suggestion.
+
+I shipped it on one live probe that happened to return well-formed orders,
+without measuring the rate. `dialects.py` already said, in a comment I wrote
+while making the change, that a loose union "lets a model answer
+`{"action": "found_city"}` with no unit and no name - measured, repeatedly".
+
+**The fix is to give up the other thing.** Pre-4.6 Anthropic keeps the strict
+schema and does without extended thinking: 0 malformed across three live calls,
+against 91%. A seat that reasons but cannot act is worth nothing; a seat that
+acts without a visible trace is worth a great deal.
+
+### The grammar ceiling is total complexity, not bytes
+
+Worth recording because it rules out the obvious fixes. Chasing a way to keep
+both, measured live against `claude-haiku-4-5` with thinking on:
+
+| schema | bytes | union-typed params | |
+|---|---|---|---|
+| strict | 4,136 | 10 | rejected |
+| strict, 3 fields removed | 3,950 | 7 | rejected |
+| strict, 6 fields removed | 3,802 | 4 | **accepted** |
+| one array per action type | 5,199 | 0 | rejected |
+| loose orders | 4,924 | 0 in orders | **accepted** |
+
+So shrinking bytes does not help - `{"type": ["string","null"]}` is still a
+union - and eliminating unions does not help either if the structure grows to
+compensate. The ceiling is the compiled grammar's total size, and no
+reformulation found gets the strict schema under it with thinking enabled.
+
+Two byte savings were kept anyway, because they are free headroom for every
+Anthropic seat: **830 bytes of `title`** that Pydantic emits and a grammar never
+reads, and the compact nullable encoding at 19 bytes a field. Together 1,211
+bytes, from 5,347 down to 4,136. Neither solves the ceiling; both were always
+removable and nobody had looked, because the schema had been small enough for
+every model that mattered at the time.
+
+### Turning on thinking shrinks the grammar budget
+
+The third distinct Anthropic schema limit here, and the one that nearly cost a
+seat. `claude-haiku-4-5` rejected the action schema with "compiled grammar is
+too large" whenever extended thinking was enabled - and accepted the identical
+bytes with thinking off.
+
+Bisected live:
+
+| | with thinking |
+|---|---|
+| strict dialect, 5,347B | 400 |
+| loose `orders`, 4,924B | **works** |
+| tiny schema, ~200B | works |
+
+Loosening `orders` costs 423 bytes and buys the whole seat: valid orders and a
+3,072-character reasoning trace where there had been none. `claude-opus-5` takes
+adaptive thinking and the strict schema unchanged, so the dialect is model-aware
+rather than provider-aware and the flagship keeps the stronger guarantee.
+
+This was one measurement away from being resolved the expensive way. The
+alternatives on the table were a reasoning-disabled civ in a four-way comparison
+or swapping in a model at three times the price - and the roster argument had
+already been made on both. **Bisect the limit before redesigning around it.**
+
 ### One seat counted its cached tokens twice
 
 `Usage.input_tokens` is defined as the *uncached* input, because the pricer
@@ -556,6 +725,18 @@ saying which case is which.
    concluding the model is weak. That mistake cost two days.
 4. If a vendor error names something that sounds like a credential or a billing
    problem, verify the model id first.
+4b. `make prices` before quoting any cost. Rates rot in both directions, and a
+   comment saying "these should be re-checked" is not a control - it was there,
+   it was accurate, and the numbers were quoted anyway.
+4c. When a vendor limit blocks a design, **bisect it before redesigning around
+   it**. The grammar ceiling looked like it cost a seat its reasoning; it cost
+   423 bytes.
+4c-bis. **Never trade schema enforcement for anything.** It is the only thing
+   standing between a model and an unusable order, and the failure is silent -
+   dropped orders look exactly like a model choosing to do nothing. Measure the
+   malformed rate over a real match before believing a looser schema is safe.
+4d. `make preflight` before anything unattended. A key that exists is not a key
+   that can pay, and the gap between those two facts cost six hours.
 5. Stage the viewer against a bot match before a paid one. It costs nothing and
    it is the only way to tell "this match had no diplomacy" from "this panel
    never rendered".

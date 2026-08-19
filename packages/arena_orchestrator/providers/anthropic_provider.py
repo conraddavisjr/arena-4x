@@ -34,10 +34,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from ..dialects import cannot_think_with_schema
 from .base import (
     THINKING_BUDGET,
     FatalProviderError,
     Malformed,
+    OutOfCredits,
     Overloaded,
     ProviderError,
     RateLimited,
@@ -143,11 +145,17 @@ class AnthropicClient:
         if self._supports_adaptive:
             thinking = {"type": "adaptive"}
             output_config["effort"] = self._effort
-        else:
+        elif not cannot_think_with_schema(self.model):
             thinking = {"type": "enabled", "budget_tokens": THINKING_BUDGET[self._effort]}
-        if self._thinking_display:
-            thinking["display"] = self._thinking_display
-        request["thinking"] = thinking
+        # Otherwise: no thinking at all. Enabling it on these models shrinks the
+        # compiled-grammar budget below what the strict action schema needs, and
+        # the schema is the thing that stops the model omitting the fields an
+        # order requires. Losing the trace costs visibility; losing enforcement
+        # cost a civilisation on turn 35. See dialects.NO_THINKING_BELOW.
+        if thinking:
+            if self._thinking_display:
+                thinking["display"] = self._thinking_display
+            request["thinking"] = thinking
 
         started = time.monotonic()
         try:
@@ -193,6 +201,15 @@ class AnthropicClient:
             latency_ms=latency_ms,
             stop_reason=message.stop_reason,
             thinking=reasoning or None,
+            effort=self._effort,
+            # The vendor form differs from the intent on this seat: 4.6+ take the
+            # enum, everything before it takes a token budget, and both are
+            # "medium" as far as the match is concerned.
+            effort_sent=(
+                self._effort
+                if self._supports_adaptive
+                else f"budget_tokens={THINKING_BUDGET[self._effort]}"
+            ),
         )
 
     async def aclose(self) -> None:
@@ -232,6 +249,10 @@ def _translate(error: Exception, sdk: Any) -> ProviderError:
     if isinstance(error, ProviderError):
         return error
     name = "anthropic"
+    # Before the 429 path: an exhausted account often arrives *as* a rate limit,
+    # and retrying it spends the ladder on something that cannot improve.
+    if OutOfCredits.matches(str(error)):
+        return OutOfCredits(str(error), provider=name)
     if isinstance(error, sdk.RateLimitError):
         return RateLimited(str(error), provider=name, retry_after=retry_after_of(error))
     if isinstance(error, sdk.APITimeoutError):

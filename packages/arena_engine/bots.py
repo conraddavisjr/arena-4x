@@ -115,7 +115,12 @@ def _handle_diplomacy(state: State, player_id: str, legal: dict, out: list) -> N
             )
         )
 
-    targets = diplo["declare_war"]
+    # `legal_actions` names civs rather than keying them, because it is written
+    # for the models - who are told to address rivals as "Gemini", not "p3".
+    # Bots read the same list and have to translate back, and getting this wrong
+    # is silent: intersecting names against ids yields the empty set, so every
+    # bot simply stopped declaring war and the matches went quiet.
+    targets = [pid for pid in (state.resolve(t) for t in diplo["declare_war"]) if pid]
     if not targets:
         return
     # Only declare on a civ we can actually see, and only once aggression has

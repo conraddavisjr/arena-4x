@@ -371,6 +371,34 @@ def test_the_rules_reference_is_byte_stable() -> None:
     assert rules.system_prompt("A", "p1") == rules.system_prompt("A", "p1")
 
 
+def test_the_rules_explain_what_the_token_budget_costs_and_does() -> None:
+    """A number with no stated consequence changes no behaviour.
+
+    The observation has carried a `budget` block - allowance, spent, remaining,
+    percent elapsed - while the rules reference mentioned it exactly zero times.
+    So an agent received four numbers and was never told that its own reasoning
+    draws on them, or what happens at zero. Asking whether awareness changes how
+    hard a model thinks is not answerable until the model is told the rules of
+    the thing it is supposed to be aware of.
+
+    Kept in the static prefix rather than added only when the allowance is on,
+    because the prefix has to stay byte-identical to cache; the text says to
+    ignore it when the block is absent.
+    """
+    prompt = rules.system_prompt("Aurelian Compact", "p1").lower()
+    assert "budget" in prompt
+    # The three facts that make it a constraint rather than a readout.
+    assert "reasoning" in prompt and "produce" in prompt, "must say thinking spends it"
+    assert "never replenished" in prompt or "for the whole match" in prompt
+    assert "stop acting" in prompt, "must say what running out actually does"
+
+
+def test_the_prefix_stays_within_its_token_budget() -> None:
+    """It is re-sent every turn and cached, so growth here is paid ~300 times."""
+    prompt = rules.system_prompt("Aurelian Compact", "p1")
+    assert len(prompt) // 4 < 3_500, "rules reference is getting expensive"
+
+
 def test_only_the_civ_identity_varies_between_agents() -> None:
     a = rules.system_prompt("Aurelian Compact", "p1")
     b = rules.system_prompt("Iron Concord", "p2")

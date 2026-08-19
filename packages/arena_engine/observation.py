@@ -158,6 +158,28 @@ class IntelView(Model):
     in_contact: bool
 
 
+class ScienceRaceView(Model):
+    """How close one civ is to the science victory, as everyone can see it.
+
+    Unlike city counts and army estimates, this is **not** fogged. A rival
+    completing the Apex Project ends the match and everyone else loses, so a
+    race nobody can see is a race nobody can contest - and that is precisely
+    what happened: one civ took the science victory on turn 128 while the other
+    three were negotiating non-aggression pacts, because the observation told
+    them only about their own progress.
+
+    Research is a public fact in the same way a wonder is. Hiding it does not
+    model secrecy, it removes a whole axis of play.
+    """
+
+    civ_name: str
+    techs_known: int
+    apex_tech_known: bool
+    apex_project_built: bool
+    # Whole percent of the way to the win condition, so a glance ranks the field.
+    pct_to_victory: int
+
+
 class VictoryProgressView(Model):
     your_cities: int
     total_cities: int
@@ -166,6 +188,8 @@ class VictoryProgressView(Model):
     turn: int
     turn_limit: int
     apex_tech_known: bool
+    # Every civ, yourself included, ordered by who is closest.
+    science_race: list[ScienceRaceView] = []
 
 
 class BudgetView(Model):
@@ -497,6 +521,41 @@ def _military_power(state: State, player_id: str) -> int:
     )
 
 
+def _science_race(state: State) -> list[ScienceRaceView]:
+    """The science standing, unfogged, for every living civ.
+
+    Weighted so the two milestones that actually decide it dominate: knowing
+    every prerequisite is most of the work, holding `apex_theory` is the point
+    of no return, and the Apex Project itself is the win. A civ reading this
+    should be able to tell "somebody is two turns from ending the match" from
+    "somebody is doing well at research", because those call for different play.
+    """
+    from arena_engine.content import APEX_PROJECT, APEX_TECH, TECHS
+
+    total = max(1, len(TECHS))
+    out: list[ScienceRaceView] = []
+    for pid in state.civ_ids():
+        player = state.players[pid]
+        if not player.alive:
+            continue
+        known = len(player.known_techs)
+        has_apex = APEX_TECH in player.known_techs
+        built = any(APEX_PROJECT in city.buildings for city in state.cities_of(pid))
+        # 70% for the tech tree, 30% for the build. Reaching apex_theory without
+        # the project still leaves real work.
+        pct = 100 if built else int(70 * known / total + (30 if has_apex else 0))
+        out.append(
+            ScienceRaceView(
+                civ_name=player.civ_name,
+                techs_known=known,
+                apex_tech_known=has_apex,
+                apex_project_built=built,
+                pct_to_victory=min(pct, 99 if not built else 100),
+            )
+        )
+    return sorted(out, key=lambda r: -r.pct_to_victory)
+
+
 def _victory_progress(state: State, player_id: str) -> VictoryProgressView:
     from arena_engine.content import APEX_TECH
 
@@ -508,6 +567,7 @@ def _victory_progress(state: State, player_id: str) -> VictoryProgressView:
         turn=state.turn,
         turn_limit=state.config.turn_limit,
         apex_tech_known=APEX_TECH in state.players[player_id].known_techs,
+        science_race=_science_race(state),
     )
 
 

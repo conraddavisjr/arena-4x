@@ -54,6 +54,7 @@ class BotClient:
     # loop's persistence of traces has to be testable without a live vendor -
     # that gap is exactly why traces went unstored for as long as they did.
     thinking: str | None = None
+    effort: str | None = "bot"
     calls: int = field(default=0, init=False)
 
     async def complete(self, system: str, user: str, schema: dict[str, Any]) -> Turn:
@@ -73,6 +74,8 @@ class BotClient:
             latency_ms=0,
             stop_reason="end_turn",
             thinking=self.thinking,
+            effort=self.effort,
+            effort_sent=self.effort,
         )
 
     async def aclose(self) -> None:
@@ -94,7 +97,7 @@ class BoardHandle:
 
 
 def bot_seats(
-    player_ids: Iterable[str], *, thinking: str | None = None
+    player_ids: Iterable[str], *, thinking: str | None = None, effort: str | None = "bot"
 ) -> tuple[dict[str, BotClient], BoardHandle]:
     """Clients for every seat, all sharing one view of the board.
 
@@ -103,5 +106,8 @@ def bot_seats(
     the opening position, and the match would go nowhere at great length.
     """
     handle = BoardHandle()
-    clients = {pid: BotClient(player_id=pid, board=handle, thinking=thinking) for pid in player_ids}
+    clients = {
+        pid: BotClient(player_id=pid, board=handle, thinking=thinking, effort=effort)
+        for pid in player_ids
+    }
     return clients, handle
