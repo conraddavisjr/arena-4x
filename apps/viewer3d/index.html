@@ -164,6 +164,14 @@
   /* The midpoint marker, so "leaning" is readable rather than estimated. */
   .slider b{position:absolute;top:-2px;width:2px;height:13px;background:var(--ink);
     opacity:.65;transform:translateX(-1px)}
+  /* A coordinate or unit id the board can point at. Subtle until hovered -
+     these appear many times per paragraph and must not turn prose into
+     confetti. */
+  .ref{border-bottom:1px dotted #6b7a8d;cursor:pointer;border-radius:3px;
+    padding:0 2px;transition:background .08s}
+  .ref:hover{background:#ffd16633;border-bottom-color:#ffd166;color:#ffe9b0}
+  .ref.unit{border-bottom-style:solid}
+  .ref.gone{border-bottom-color:#4d5560;color:var(--faint);cursor:help}
   td .n{margin-left:6px;color:var(--faint);font-size:11px}
   td.hurt{color:#f87171;font-weight:600}
   .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
@@ -363,7 +371,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/OrbitControls.js";
 import {
-  HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
+  HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, HEX, axialToWorld,
   buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements, buildPacts,
   unitModel, baseGeometry, surfaceAtlas,
 } from "./world.js";
@@ -427,7 +435,76 @@ scene.add(sun);
 
 const staticLayer = new THREE.Group();   // terrain, scatter - built once
 const dynamicLayer = new THREE.Group();  // units, cities, borders - per turn
-scene.add(staticLayer, dynamicLayer);
+const pointerLayer = new THREE.Group();  // the hover marker, never rebuilt
+scene.add(staticLayer, dynamicLayer, pointerLayer);
+
+/**
+ * The marker that answers "which tile is it talking about".
+ *
+ * Agents write in coordinates - "move settler u64 to (-8,0)" - which is precise
+ * and unreadable: finding (-8,0) on a 1027-tile hex board by eye takes longer
+ * than reading the sentence. So the sentence points at the board instead.
+ *
+ * A ring on the tile *and* an arrow above it. The ring alone is easy to lose
+ * against terrain at low zoom; the arrow is visible from any angle and reads as
+ * deixis rather than decoration. Built once and moved, rather than rebuilt per
+ * hover, because hovering a paragraph fires this dozens of times a second.
+ */
+const marker = (() => {
+  const group = new THREE.Group();
+  // `fog: false` matters more than it looks. Scene fog is tuned to make distant
+  // terrain recede, and a marker that recedes with it is useless at exactly the
+  // moment you need it - pointing at something far from the camera.
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(HEX * 0.72, HEX * 1.08, 6),
+    new THREE.MeshBasicMaterial({
+      color: 0xffd166, transparent: true, opacity: 0.95,
+      side: THREE.DoubleSide, depthTest: false, fog: false,
+    })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  // Flat-topped to match the tiles, which are drawn without rotation.
+  ring.rotation.z = Math.PI / 6;
+  ring.renderOrder = 20;
+  // Sized to be findable from across the board. The ring alone was correct and
+  // nearly invisible at default zoom, which is the only zoom most people use.
+  const arrow = new THREE.Mesh(
+    new THREE.ConeGeometry(HEX * 0.42, HEX * 1.1, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffd166, depthTest: false, fog: false })
+  );
+  arrow.rotation.x = Math.PI;   // point down at the tile
+  arrow.renderOrder = 20;
+  group.add(ring, arrow);
+  group.visible = false;
+  group.renderOrder = 20;
+  pointerLayer.add(group);
+  return { group, arrow };
+})();
+
+let markerBob = 0;
+
+function pointAt(tileIndex) {
+  if (tileIndex == null || !S.match) return clearPointer();
+  const key = S.match.tiles[tileIndex];
+  if (key === undefined) return clearPointer();
+  const [q, r] = key.split(",").map(Number);
+  const [x, , z] = axialToWorld(q, r);
+  const y = topOf(tileIndex);
+  marker.group.position.set(x, y + 0.02, z);
+  marker.arrow.position.y = 1.6;
+  marker.group.visible = true;
+}
+
+function clearPointer() {
+  marker.group.visible = false;
+}
+
+/** Tile index for a `"q,r"` key, or null if it is off the map. */
+function tileAt(key) {
+  const i = S.tileIndex?.get(key);
+  return i === undefined ? null : i;
+}
+
 
 function resize() {
   const { clientWidth: w, clientHeight: h } = stage;
@@ -439,6 +516,10 @@ addEventListener("resize", resize);
 
 (function loop() {
   requestAnimationFrame(loop);
+  if (marker.group.visible) {
+    markerBob += 0.09;
+    marker.arrow.position.y = 1.6 + Math.sin(markerBob) * 0.16;
+  }
   controls.update();
   renderer.render(scene, camera);
 })();
@@ -983,11 +1064,11 @@ function panels() {
     // and the event ticker off the screen entirely.
     const open = S.expanded === c.player_id || thinkers.length === 1;
     const detail = open ? `
-      ${d.assessment ? `<p><b>Situation.</b> ${esc(d.assessment)}</p>` : ""}
-      ${(d.threats||[]).length ? `<p><b>Threats.</b> ${esc((d.threats||[]).join(" · "))}</p>` : ""}
-      <p class="plan"><b>Plan.</b> ${esc(d.plan||"—")}</p>
+      ${d.assessment ? `<p><b>Situation.</b> ${linkRefs(esc(d.assessment))}</p>` : ""}
+      ${(d.threats||[]).length ? `<p><b>Threats.</b> ${linkRefs(esc((d.threats||[]).join(" · ")))}</p>` : ""}
+      <p class="plan"><b>Plan.</b> ${linkRefs(esc(d.plan||"—"))}</p>
       ${d.confidence != null ? `<p class="meta">confidence ${d.confidence}</p>` : ""}` : `
-      <p class="plan clamp">${esc(d.plan||"—")}</p>`;
+      <p class="plan clamp">${linkRefs(esc(d.plan||"—"))}</p>`;
     return `<div class="card ${open?"open":""}" data-civ="${c.player_id}">
       <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.model || c.civ_name}
         <span class="meta">${
@@ -1403,11 +1484,11 @@ async function drawDiplomacy(relationLines) {
         // rendering failure rather than as a choice. A model signing a pact
         // without comment is a real and slightly cold thing to have done, and
         // the panel should say so rather than leave a gap.
-        m.text ? esc(m.text)
+        m.text ? linkRefs(esc(m.text))
                : `<span class="wordless">${m.kind === "reply"
                     ? `signed without comment` : `sent with no note attached`}</span>`}
       ${m.turn === S.turn && f_reasoning(m.from) ? `<div class="aside">
-        <b>its plan that turn:</b> ${esc(f_reasoning(m.from))}</div>` : ""}</div>`;
+        <b>its plan that turn:</b> ${linkRefs(esc(f_reasoning(m.from)))}</div>` : ""}</div>`;
   }).join("") : `<div class="empty">Nothing said in this thread yet.</div>`;
 
   $("messages").innerHTML = `<div class="threads">${tabs}</div>${body}` +
@@ -1420,6 +1501,49 @@ async function drawDiplomacy(relationLines) {
     // transcript into a way of navigating the match.
     if (msg && +msg.dataset.turn !== S.turn) show(+msg.dataset.turn);
   };
+}
+
+/**
+ * Turn coordinates and unit ids in a model's prose into things you can point at.
+ *
+ * Agents write "Move settler u64 to (-8,0) en route to site (-9,-1)". Every one
+ * of those references is exact and, on a 1027-tile board, unfindable by eye -
+ * so the reasoning panel described a board the reader could not locate.
+ *
+ * Applied *after* escaping, never before: the input is model output and goes
+ * into `innerHTML`. `esc` runs first, this only ever inserts spans around text
+ * that is already inert, and the pattern matches digits and commas rather than
+ * anything that could carry markup.
+ *
+ * A unit resolves to the tile it currently stands on. Highlighting the mesh
+ * itself would be better and is much more work - instanced meshes share one
+ * material - and the tile is enough to answer "where is it".
+ */
+// One pass, one alternation. Two sequential `replace` calls would rescan the
+// markup the first one inserted, and a coordinate pattern hiding inside an
+// attribute is the kind of bug that only shows up on one sentence in a hundred.
+//
+// No `\b` before the number: a word boundary does not exist between a space and
+// a minus, so `-13,6` matched as `13,6`, resolved to a different tile or none,
+// and the pill silently vanished from every negative coordinate - which on this
+// map is most of them.
+const REF_RE = /\bu(\d{1,4})\b|\(?(-?\d{1,2}),\s?(-?\d{1,2})\)?/g;
+
+function linkRefs(escaped) {
+  if (!escaped) return escaped;
+  return escaped.replace(REF_RE, (whole, unitId, q, r) => {
+    if (unitId !== undefined) {
+      const unit = (S.frame?.units || []).find((u) => u.id === `u${unitId}`);
+      // A dead unit still gets a pill, marked. The sentence referred to
+      // something real when it was written, and "this no longer exists" is
+      // itself worth seeing when reading back an old turn.
+      return unit
+        ? `<span class="ref unit" data-tile="${unit.at}">${whole}</span>`
+        : `<span class="ref gone" title="no longer on the board">${whole}</span>`;
+    }
+    const index = tileAt(`${q},${r}`);
+    return index == null ? whole : `<span class="ref" data-tile="${index}">${whole}</span>`;
+  });
 }
 
 /** The sender's own private plan on a given turn, if this frame carries it. */
@@ -1710,6 +1834,9 @@ function tooltips(root) {
   }
   S.match = await res.json();
 
+  // Key -> index, so a coordinate written in prose can be found in O(1).
+  S.tileIndex = new Map(S.match.tiles.map((key, i) => [key, i]));
+
   staticLayer.add(buildTerrain(S.match.tiles, S.match.terrain));
   staticLayer.add(buildScatter(S.match.tiles, S.match.terrain));
   staticLayer.add(buildResources(S.match.tiles, S.match.terrain, S.match.resources));
@@ -1801,6 +1928,17 @@ function tooltips(root) {
     panels();
   };
   tooltips(document.querySelector("aside"));
+  // Delegated, so it covers every panel that renders model prose and keeps
+  // working as those panels are re-rendered each turn.
+  const aside = document.querySelector("aside");
+  aside.addEventListener("mouseover", (ev) => {
+    const ref = ev.target.closest(".ref[data-tile]");
+    if (ref) pointAt(+ref.dataset.tile);
+  });
+  aside.addEventListener("mouseout", (ev) => {
+    if (ev.target.closest(".ref[data-tile]")) clearPointer();
+  });
+  aside.addEventListener("scroll", clearPointer, true);
   wireLibrary();
   $("slider").max = S.match.turns;
   $("slider").oninput = (e) => show(+e.target.value);
