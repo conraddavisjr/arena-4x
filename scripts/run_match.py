@@ -42,20 +42,39 @@ from arena_orchestrator.loop import Orchestrator  # noqa: E402
 CIVS = ["Aurelian Compact", "Iron Concord", "Verdant Pact", "Solari Dominion"]
 
 
+# The family name, not the version. `claude-haiku-4-5` and `claude-opus-5` are
+# both "Claude" at the table, which is what a rival would actually say.
+FAMILY = {
+    "anthropic": "Claude",
+    "openai": "GPT",
+    "google": "Gemini",
+    "xai": "Grok",
+}
+
+
 def civ_name(index: int, provider: str, model: str | None) -> str:
     """What the agents call each other.
 
-    The model id, deliberately. It goes into the system prompt and into every
-    message an agent writes, so "Greetings Iron Concord" becomes "Greetings
-    gpt-5.4-mini" and a transcript can be read without a decoder ring.
+    The model's family name, deliberately - "Claude", "GPT", "Gemini", "Grok".
+    It goes into the system prompt and into every message an agent writes, so
+    "Greetings Iron Concord" becomes "Greetings Gemini" and a transcript reads
+    without a decoder ring.
 
-    Worth being explicit that this is a choice with a cost: every agent now
-    knows which model it is and which models it faces. Whether a model plays
-    differently knowing it is Opus facing Grok is a real question, and this
+    The *family* rather than the full id, because the version is noise in a
+    conversation. "Greetings gpt-5.4-mini" is a mouthful nobody would say, and
+    when the flagship roster swaps `gpt-5.4-mini` for `gpt-5.6` the transcripts
+    stay comparable. The exact model still lives in the journal, the bundle and
+    the cost table, where the version actually matters.
+
+    Worth being explicit that this is a choice with a cost: every agent knows
+    which model it is and which models it faces. Whether a model plays
+    differently knowing it is Claude facing Grok is a real question, and this
     setting answers it in one direction. Run with `CIVS` names instead for the
     other.
     """
-    return model or (CIVS[index] if provider == "bot" else provider)
+    if provider == "bot":
+        return CIVS[index]
+    return FAMILY.get(provider) or model or provider
 
 
 PROVIDERS = ("anthropic", "openai", "google", "xai")

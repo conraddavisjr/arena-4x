@@ -566,6 +566,41 @@
       "title": "Resource",
       "type": "string"
     },
+    "ScienceRaceView": {
+      "additionalProperties": false,
+      "description": "How close one civ is to the science victory, as everyone can see it.\n\nUnlike city counts and army estimates, this is **not** fogged. A rival\ncompleting the Apex Project ends the match and everyone else loses, so a\nrace nobody can see is a race nobody can contest - and that is precisely\nwhat happened: one civ took the science victory on turn 128 while the other\nthree were negotiating non-aggression pacts, because the observation told\nthem only about their own progress.\n\nResearch is a public fact in the same way a wonder is. Hiding it does not\nmodel secrecy, it removes a whole axis of play.",
+      "properties": {
+        "apex_project_built": {
+          "title": "Apex Project Built",
+          "type": "boolean"
+        },
+        "apex_tech_known": {
+          "title": "Apex Tech Known",
+          "type": "boolean"
+        },
+        "civ_name": {
+          "title": "Civ Name",
+          "type": "string"
+        },
+        "pct_to_victory": {
+          "title": "Pct To Victory",
+          "type": "integer"
+        },
+        "techs_known": {
+          "title": "Techs Known",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "apex_project_built",
+        "apex_tech_known",
+        "civ_name",
+        "pct_to_victory",
+        "techs_known"
+      ],
+      "title": "ScienceRaceView",
+      "type": "object"
+    },
     "Terrain": {
       "enum": [
         "ocean",
@@ -709,6 +744,13 @@
           "title": "Domination Threshold Pct",
           "type": "integer"
         },
+        "science_race": {
+          "items": {
+            "$ref": "#/$defs/ScienceRaceView"
+          },
+          "title": "Science Race",
+          "type": "array"
+        },
         "total_cities": {
           "title": "Total Cities",
           "type": "integer"
@@ -730,6 +772,7 @@
         "apex_tech_known",
         "domination_streak",
         "domination_threshold_pct",
+        "science_race",
         "total_cities",
         "turn",
         "turn_limit",

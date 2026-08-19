@@ -122,14 +122,19 @@ def spawn(state: State, out: list[Event]) -> None:
     wild = _wild_tiles(state)
     sites: list[Hex] | None = None
 
-    wolf_cap = int(wild * WOLVES_PER_100_WILD / 100)
-    raider_cap = int(wild * BARBARIANS_PER_100_WILD / 100)
+    # Scaled by `MatchConfig.wilderness`, which is how the whole mechanic is
+    # dialled down or off without touching the tables below.
+    density = state.config.wilderness
+    wolf_cap = int(wild * WOLVES_PER_100_WILD * density / 100)
+    raider_cap = int(wild * BARBARIANS_PER_100_WILD * density / 100)
+    if density <= 0:
+        return
 
     plans: list[tuple[UnitType, int, float, str]] = []
     if state.turn <= WOLF_UNTIL_TURN and _count(state, UnitType.WOLF) < wolf_cap:
-        plans.append((UnitType.WOLF, wolf_cap, WOLF_SPAWN_CHANCE, "wolves"))
+        plans.append((UnitType.WOLF, wolf_cap, WOLF_SPAWN_CHANCE * density, "wolves"))
     if state.turn >= BARBARIAN_FIRST_TURN and _count(state, UnitType.BARBARIAN) < raider_cap:
-        plans.append((UnitType.BARBARIAN, raider_cap, BARBARIAN_SPAWN_CHANCE, "raiders"))
+        plans.append((UnitType.BARBARIAN, raider_cap, BARBARIAN_SPAWN_CHANCE * density, "raiders"))
 
     for kind, _cap, chance, label in plans:
         if not rng.chance(state.seed, chance, "barb_spawn", state.turn, label):

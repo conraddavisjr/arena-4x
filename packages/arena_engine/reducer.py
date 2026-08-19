@@ -517,7 +517,7 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
     for item in action.diplomacy:
         match item.action:
             case "send_message":
-                target = item.to if item.channel == "private" else None
+                target = s.resolve(item.to) if item.channel == "private" else None
                 # `target not in s.players` is not enough: the wilderness *is*
                 # a player, so without the neutral check an agent could open a
                 # private channel with a wolf pack and have it accepted.
@@ -539,6 +539,7 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                     )
                 )
             case "propose":
+                item = item.model_copy(update={"to": s.resolve(item.to)})
                 if item.to not in s.players or item.to == player_id or s.is_neutral(item.to):
                     _reject(s, out, player_id, "propose", f"cannot negotiate with {item.to!r}")
                     continue
@@ -608,6 +609,7 @@ def _apply_diplomacy(s: State, player_id: str, action: Action, out: list[Event])
                     )
                 )
             case "declare_war":
+                item = item.model_copy(update={"on": s.resolve(item.on)})
                 if item.on not in s.players or item.on == player_id or s.is_neutral(item.on):
                     _reject(s, out, player_id, "declare_war", f"cannot declare war on {item.on!r}")
                     continue
@@ -1110,10 +1112,17 @@ def legal_actions(state: State, player_id: str) -> dict:
         # slider as the one lever with no name anywhere in the observation. A
         # model that wanted it had to invent one, and did: `set_taxes`.
         "set_rates": True,
+        # Named rather than keyed. This list is where an agent looks to decide
+        # who to talk to, and it read `["p2","p3","p4"]` while every other part
+        # of the observation called them Claude, GPT and Gemini - so the one
+        # place that answers "who can I message" was the one place that did not
+        # say who they were.
         "diplomacy": {
-            "send_message": others,
-            "propose": others,
-            "declare_war": [p for p in others if not state.at_war(player_id, p)],
+            "send_message": [state.players[p].civ_name for p in others],
+            "propose": [state.players[p].civ_name for p in others],
+            "declare_war": [
+                state.players[p].civ_name for p in others if not state.at_war(player_id, p)
+            ],
             "respond_to_proposal": [p.id for p in diplomacy.open_proposals_for(state, player_id)],
         },
     }

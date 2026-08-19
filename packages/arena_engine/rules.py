@@ -219,6 +219,18 @@ turn. There is no instant negotiation.
 - **Score** - if the turn limit is reached, the highest score wins. Score counts
   cities, population, techs, military and culture, with cities weighted most.
 
+**Any of these ends the match immediately, for everyone.** There is no second
+place. If a rival completes the `{APEX_PROJECT}`, the game is over on that turn
+and you have lost it, however many cities you hold and whatever your score.
+
+`victory_progress.science_race` shows how close **every** civilisation is,
+yourself included, ranked by who is nearest. That standing is not fogged - like
+a wonder, research is a public fact - so nobody can be surprised by it, and
+nobody has the excuse of not having looked. A civ holding `{APEX_TECH}` is one
+build away from ending the match. Treat it accordingly: a rival at 90% is a more
+urgent problem than a rival with a large army, because an army can be defended
+against and a finished wonder cannot be undone.
+
 ## Cities
 
 Found with a settler on settleable terrain, at least {MIN_CITY_SPACING} hexes

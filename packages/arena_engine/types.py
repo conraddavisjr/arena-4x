@@ -351,6 +351,22 @@ class MatchConfig(Model):
     # paid for in tokens on every turn by every agent.
     public_log_size: int = 8
     inbox_size: int = 8
+    # How much wilderness the map carries, as a multiplier on the spawn caps and
+    # rates. 1.0 is the original setting; 0.0 empties the world of wolves and
+    # raiders entirely.
+    #
+    # Measured over a completed 128-turn match at 1.0: civs lost **23 units to
+    # wildlife against 1 to each other**, and 71% of every fight on the board
+    # involved a wolf or a raider. That is not a backdrop, it is the main
+    # antagonist - and this lab exists to watch four models deal with *each
+    # other*. One seat's collapse was materially accelerated by wolves.
+    #
+    # Not removed, because a world with no threat makes early military pointless
+    # and hands an unearned advantage to whoever builds none. Turned down to a
+    # third, and made a knob so the next run can ask what it is worth rather
+    # than inheriting a number nobody chose.
+    wilderness: float = 0.34
+
     recent_events_size: int = 10
 
 
@@ -418,6 +434,26 @@ class State(Model):
 
     def living_civ_ids(self) -> list[str]:
         return [p for p in self.civ_ids() if self.players[p].alive]
+
+    def resolve(self, who: str | None) -> str | None:
+        """A player id from either an id or a civ name.
+
+        Agents are shown civ names now - "Greetings Gemini", not "Greetings p3"
+        - so they answer in names too, and an engine that only understood `p3`
+          would reject every one of those as an unknown recipient.
+
+        Ids still work, and are tried first: they are the canonical key, they
+        appear in the journal, and a name lookup that shadowed them would make
+        replaying an old journal ambiguous. Matching is case-insensitive because
+        a model writing "gemini" mid-sentence means the same civ.
+        """
+        if who is None or who in self.players:
+            return who
+        folded = who.strip().casefold()
+        for pid, player in self.players.items():
+            if player.civ_name.casefold() == folded:
+                return pid
+        return who
 
     def is_neutral(self, player_id: str) -> bool:
         player = self.players.get(player_id)
