@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from arena_engine import economy, victory
-from arena_engine.content import UNITS, Domain
+from arena_engine.content import APEX_PROJECT, APEX_TECH, UNITS, Domain
 from arena_engine.events import Event
 from arena_engine.types import State
 
@@ -94,6 +94,20 @@ def _economy(state: State, player_id: str) -> dict[str, Any]:
         "at_sea": sum(1 for u in units if u.embarked),
         "navy": sum(1 for u in units if UNITS[u.type].domain is Domain.SEA),
         "techs": len(player.known_techs),
+        # The two milestones that decide the science victory, rather than a tech
+        # count that cannot distinguish "researching hard" from "one build away
+        # from ending the match". A civ took the science win on turn 128 and the
+        # replay had no way to show it coming either.
+        "apex_tech": APEX_TECH in player.known_techs,
+        "apex_built": any(APEX_PROJECT in c.buildings for c in cities),
+        # Strength rather than headcount. Ten warriors and ten swordsmen are the
+        # same number and not the same army, and the war slider is meaningless
+        # if it counts them alike.
+        "power": sum(
+            UNITS[u.type].attack + UNITS[u.type].defense
+            for u in units
+            if not UNITS[u.type].civilian
+        ),
         "researching": player.researching,
         "score": victory.score(state, player_id),
         "alive": player.alive,

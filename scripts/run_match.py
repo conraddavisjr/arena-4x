@@ -149,7 +149,11 @@ def build_config(args: argparse.Namespace) -> RunConfig:
     return RunConfig(
         seed=args.seed,
         seats=seats,
-        match=MatchConfig(turn_limit=args.turns),
+        # A third of the original wildlife. Set here rather than in the engine
+        # default, because `MatchConfig` is inside the state hash and moving the
+        # default would silently replay every past match as a different one -
+        # journals written before the field existed carry no value for it.
+        match=MatchConfig(turn_limit=args.turns, wilderness=args.wilderness),
         budget_usd=args.budget,
         agent_budget_awareness=args.awareness,
         requests_per_minute=1e9 if unthrottled else 50.0,
@@ -180,6 +184,12 @@ async def main() -> None:
         type=float,
         default=None,
         help="seconds before a turn is abandoned and the agent passes",
+    )
+    parser.add_argument(
+        "--wilderness",
+        type=float,
+        default=0.34,
+        help="wolf and raider density; 1.0 is the original setting, 0 empties the map",
     )
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--resume", type=Path, default=None)

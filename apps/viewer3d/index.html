@@ -141,6 +141,29 @@
      the live thread ring - so the eye learns one colour rather than three. */
   td.moved{color:#4ade80;font-weight:600}
   td.moved .arrow-up{font-size:8px;margin-left:3px;vertical-align:top}
+  /* The science race and the war fronts. Both live under Signals because they
+     answer the same question the panel exists for: who is quietly winning. */
+  .race{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+  .racehead{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--dim);margin-bottom:5px}
+  .racehead .meta{text-transform:none;letter-spacing:0;margin-left:6px;cursor:help;
+    text-decoration:underline dotted var(--faint);text-underline-offset:2px}
+  .racerow{display:grid;grid-template-columns:9px 90px 1fr auto;gap:6px;
+    align-items:center;margin:3px 0;font-size:11px}
+  .racename{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .racenote{color:var(--faint);font-size:10px;white-space:nowrap}
+  /* A civ one build from ending the match is the most urgent fact on screen. */
+  .racenote.close{color:#fbbf24;font-weight:600}
+  .front{display:grid;grid-template-columns:9px auto 1fr auto 9px;gap:5px;
+    align-items:center;margin:4px 0;font-size:11px}
+  .frontname{white-space:nowrap;max-width:78px;overflow:hidden;text-overflow:ellipsis}
+  .frontname.right{text-align:right}
+  .slider{position:relative;display:flex;height:9px;border-radius:5px;overflow:hidden;
+    background:#1b222c}
+  .slider i{display:block;height:100%}
+  /* The midpoint marker, so "leaning" is readable rather than estimated. */
+  .slider b{position:absolute;top:-2px;width:2px;height:13px;background:var(--ink);
+    opacity:.65;transform:translateX(-1px)}
   td .n{margin-left:6px;color:var(--faint);font-size:11px}
   td.hurt{color:#f87171;font-weight:600}
   .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
@@ -183,6 +206,11 @@
      read at a glance or in a screenshot. */
   #viewMenu button[aria-checked="true"]::after{content:"✓";margin-left:auto;color:#4ade80}
   .civ{display:flex;align-items:center;gap:6px}
+  /* The name keeps its line; tags wrap underneath it. Long tag text was
+     squeezing "gpt-5.4-mini" into three wrapped lines. */
+  .sigrow .who{flex-wrap:wrap;row-gap:4px}
+  .sigrow .who > .dot{flex:none}
+  .sigrow .tags{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:4px}
   .dot{width:9px;height:9px;border-radius:50%;flex:none}
   .dead{opacity:.4;text-decoration:line-through}
   .neg{color:#f87171}.pos{color:#4ade80}
@@ -480,6 +508,7 @@ async function foldTo(turn) {
   const sig = (pid) => (signals[pid] ??= {
     said: 0, dm: 0, lostToWild: 0, sacked: 0, met: new Set(),
     fights: 0, kills: 0, losses: 0, wildFights: 0, log: [],
+    lessons: 0, commitments: 0, rivalsModelled: 0,
   });
   // The last view each agent expressed about each rival, whenever it expressed
   // it. Not the same as "what its dossier said last turn": agents rewrite the
@@ -554,6 +583,16 @@ async function foldTo(turn) {
     }
     before = dossiers;
     dossiers = { ...dossiers, ...(f.dossiers || {}) };
+    // What each civ is carrying in its own memory, as of this turn. A count
+    // rather than the text, because the question the panel answers is "is this
+    // one learning anything" - a civ at nine lessons and one at zero are
+    // playing differently, and that is visible long before the text is read.
+    for (const [pid, d] of Object.entries(dossiers)) {
+      const row = sig(pid);
+      row.lessons = (d.lessons || []).length;
+      row.commitments = (d.standing_commitments || []).length;
+      row.rivalsModelled = (d.opponent_models || []).length;
+    }
   }
   return { owners, explored, dossiers, before, priorTrust, spend, signals };
 }
@@ -757,6 +796,94 @@ function dossierPick(ev) {
  * effort it stops being configuration and becomes a move, and the turn a model
  * decides to think harder is then one of the more interesting events in a match.
  */
+/**
+ * Who is closest to ending the match by science.
+ *
+ * Worth its own meter because the science victory is the one that arrives
+ * without warning. A conquest builds visibly - armies move, cities change hands
+ * - while a research win is a number nobody was watching until the match stops.
+ * One did exactly that on turn 128 while the other three were signing pacts.
+ *
+ * `apex_tech` marks the point of no return: that civ needs only to build the
+ * project. Older bundles predate these fields, so the meter falls back to a
+ * plain tech count and says which it is showing rather than inventing certainty.
+ */
+function scienceRace(rows) {
+  const known = rows.map(({ c, e }) => ({
+    c,
+    techs: e.techs || 0,
+    apex: e.apex_tech === true,
+    built: e.apex_built === true,
+    exact: e.apex_tech !== undefined,
+  }));
+  const most = Math.max(1, ...known.map((r) => r.techs));
+  const exact = known.some((r) => r.exact);
+  const ranked = [...known].sort(
+    (a, b) => b.built - a.built || b.apex - a.apex || b.techs - a.techs
+  );
+  return `<div class="race">
+    <div class="racehead">science race
+      <span class="meta" title="How close each civ is to researching apex_theory and
+        building the apex_project. Completing it ends the match immediately and
+        everyone else loses, however many cities they hold.">${
+        exact ? "to the apex project" : "by techs known (older match)"}</span></div>
+    ${ranked.map((r) => {
+      const pct = r.built ? 100 : Math.round(100 * r.techs / most);
+      const note = r.built ? "BUILT - match over"
+        : r.apex ? "has apex_theory - one build away" : `${r.techs} techs`;
+      return `<div class="racerow" title="${esc(note)}">
+        <span class="dot" style="background:${CSS[r.c.colour]}"></span>
+        <span class="racename">${esc(r.c.model || r.c.civ_name)}</span>
+        <span class="bars"><i style="width:${pct}%;background:${CSS[r.c.colour]}"></i></span>
+        <span class="racenote ${r.apex || r.built ? "close" : ""}">${esc(note)}</span></div>`;
+    }).join("")}
+  </div>`;
+}
+
+/**
+ * For each pair at war, which way it is going.
+ *
+ * A single bar split between two civ colours, leaning toward whoever holds more
+ * military strength. Strength rather than headcount - ten warriors and ten
+ * swordsmen are the same number and not the same army - falling back to unit
+ * count on bundles written before `power` existed.
+ *
+ * Only pairs actually at war. A slider between civs at peace would be a
+ * comparison, not a front, and the panel already has those.
+ */
+function warFronts(rows) {
+  const by = Object.fromEntries(rows.map(({ c, e }) => [c.player_id, { c, e }]));
+  const fronts = Object.entries(S.frame.relations || {})
+    .filter(([, v]) => v.state === "war")
+    .map(([pair]) => pair.split("|"))
+    .filter(([a, b]) => by[a] && by[b]);
+  if (!fronts.length) return "";
+
+  const strength = (side) => side.e.power ?? (side.e.military || 0);
+  return `<div class="race">
+    <div class="racehead">wars
+      <span class="meta" title="Each bar is one war, split by military strength -
+        attack plus defence across every non-civilian unit. The bar leans toward
+        whoever is currently stronger. It measures the balance of force, not who
+        is winning the war on the map.">balance of force</span></div>
+    ${fronts.map(([a, b]) => {
+      const left = by[a], right = by[b];
+      const la = Math.max(0, strength(left)), lb = Math.max(0, strength(right));
+      const total = Math.max(1, la + lb);
+      const pct = Math.round(100 * la / total);
+      return `<div class="front">
+        <span class="dot" style="background:${CSS[left.c.colour]}"></span>
+        <span class="frontname">${esc(left.c.model || left.c.civ_name)}</span>
+        <span class="slider" title="${la} vs ${lb} strength">
+          <i style="width:${pct}%;background:${CSS[left.c.colour]}"></i>
+          <i style="width:${100 - pct}%;background:${CSS[right.c.colour]}"></i>
+          <b style="left:${pct}%"></b></span>
+        <span class="frontname right">${esc(right.c.model || right.c.civ_name)}</span>
+        <span class="dot" style="background:${CSS[right.c.colour]}"></span></div>`;
+    }).join("")}
+  </div>`;
+}
+
 function effortCell(s) {
   if (!s.effort) return `<td class="meta">—</td>`;
   // A change is marked, not merely implied by the value differing from a row you
@@ -985,7 +1112,9 @@ function drawDossier(f) {
   // chooses to write to itself and is handed back verbatim next turn. The
   // turn-by-turn thinking is the Reasoning panel, for all four civs at once.
   const note = `<p class="meta">What this agent chose to remember. Its
-    turn-by-turn thinking is in Reasoning.</p>`;
+    turn-by-turn thinking is in Reasoning. <b>trusts:</b> how far it believes
+    that rival&#39;s word - its own judgement, revised as promises are kept or
+    broken. Not a threat rating.</p>`;
   // "All" shows every civ's memory side by side, including the ones that have
   // written nothing - an empty dossier is itself a finding, and two of four
   // models in the first match kept no opponent models at all. Scrubbing with
@@ -1012,7 +1141,8 @@ function drawDossier(f) {
         ${!d ? `<p class="empty">Nothing written yet.</p>` : open ? `
         <p><b>Doctrine.</b> ${esc(d.doctrine || "—")}</p>
         ${(d.opponent_models || []).map((m) => `<p><b>${esc(nameOf(m.player_id))}</b>
-          <span class="trust ${m.trustworthiness}">${m.trustworthiness}</span><br>
+          <span class="trust ${m.trustworthiness}" title="How far this civ trusts that rival&#39;s word, in its own judgement - not a threat rating and not a measure of strength. It is the one field the dossier asks a model to revise when evidence arrives, so a promise kept or broken is exactly what should move it."
+            >trusts: ${m.trustworthiness}</span><br>
           ${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`).join("")
           || `<p class="meta">no opponent models</p>`}
         ${(d.standing_commitments || []).length ? `<p><b>Commitments.</b></p>
@@ -1023,7 +1153,7 @@ function drawDossier(f) {
         <p class="meta">${(d.opponent_models || []).length
             ? (d.opponent_models || []).map((m) =>
                 `${esc(nameOf(m.player_id))} <span class="trust ${m.trustworthiness}"
-                  >${m.trustworthiness}</span>`).join(" · ")
+                  title="How far this civ trusts that rival&#39;s word, in its own judgement - not a threat rating and not a measure of strength. It is the one field the dossier asks a model to revise when evidence arrives, so a promise kept or broken is exactly what should move it.">trusts: ${m.trustworthiness}</span>`).join(" · ")
             : "no opponent models"} ·
           ${(d.standing_commitments || []).length} commitments ·
           ${(d.lessons || []).length} lessons</p>`}</div>`;
@@ -1048,7 +1178,8 @@ function drawDossier(f) {
       const prior = S.priorTrust?.[who]?.[m.player_id];
       const turned = prior && prior !== m.trustworthiness;
       return `<p class="${old ? "" : "fresh"}"><b>${nameOf(m.player_id)}</b>
-        <span class="trust ${m.trustworthiness} ${turned ? "fresh" : ""}">${m.trustworthiness}</span>
+        <span class="trust ${m.trustworthiness} ${turned ? "fresh" : ""}"
+          title="How far this civ trusts that rival&#39;s word, in its own judgement - not a threat rating and not a measure of strength. It is the one field the dossier asks a model to revise when evidence arrives, so a promise kept or broken is exactly what should move it.">trusts: ${m.trustworthiness}</span>
         ${turned ? `<span class="edited">was ${prior}</span>` : ""}
         <br>${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`;
     }).join("")}
@@ -1091,11 +1222,32 @@ function drawSignals() {
     const units = e.units || 0;
     const military = e.military || 0;
     const hurt = g.lostToWild + g.sacked;
+    // Every tag carries a title now. They read "met 3" and "12 sent" before,
+    // which is a number and a word and no way to tell what either counted.
     const tags = [
-      g.met.size ? `<span class="tag">met ${g.met.size}</span>` : "",
-      g.said ? `<span class="tag">${g.said} sent</span>` : "",
-      hurt ? `<span class="tag bad" title="${g.lostToWild} units lost, ${g.sacked} cities sacked"
-        >${hurt} to the wild</span>` : "",
+      g.met.size
+        ? `<span class="tag" title="Rivals this civ has made contact with - seen a
+            unit or city of theirs at least once. Contact is what unlocks
+            diplomacy with them.">met ${g.met.size}</span>`
+        : "",
+      g.said
+        ? `<span class="tag" title="Messages, proposals and replies sent so far,
+            public and private together.">${g.said} sent</span>`
+        : "",
+      g.lessons
+        ? `<span class="tag" title="Lessons this civ keeps in its dossier - what it
+            decided was worth remembering about how this world works. It writes
+            them itself and reads them back every turn.">${g.lessons} lessons</span>`
+        : "",
+      g.rivalsModelled
+        ? `<span class="tag" title="Rivals it has written an opinion about, with an
+            assessed intent and a trust rating.">${g.rivalsModelled} judged</span>`
+        : "",
+      hurt
+        ? `<span class="tag bad" title="${g.lostToWild} units lost and ${g.sacked}
+            cities sacked by wolves and barbarians - the wilderness, not a
+            rival.">${hurt} to wild</span>`
+        : "",
     ].join("");
     return `<div class="sigrow">
       <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${
@@ -1118,13 +1270,16 @@ function drawSignals() {
         [g.dm / talk, "dm", `${g.dm} private`],
       ])}<span class="n">${g.said || "0"}</span></div>
     </div>`;
-  }).join("") + `<div class="tick" style="margin-top:8px">economy is
+  }).join("") + scienceRace(rows) + warFronts(rows) + `<div class="tick" style="margin-top:8px">economy is
     <b class="k food">food</b> / <b class="k gold">gold</b> / <b class="k sci">science</b> /
     <b class="k prod">production</b>, named in the order they are drawn -
     each scaled against the strongest civ · army is the
     <b class="k mil">military</b> share of units · talk is
     <b class="k pub">public</b> / <b class="k dm">private</b> · the wild is
-    barbarians and wolves</div>`;
+    barbarians and wolves<br><b>met</b> rivals contacted ·
+    <b>sent</b> messages and proposals · <b>lessons</b> and <b>judged</b> are
+    what it keeps in its dossier · <b>to wild</b> is losses to wolves and
+    raiders rather than to a rival</div>`;
 
   const pressure = rows.reduce((a, { g }) => a + g.lostToWild + g.sacked, 0);
   badge("signals", pressure || S.match.civs.length, pressure > 0);

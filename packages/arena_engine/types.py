@@ -362,10 +362,33 @@ class MatchConfig(Model):
     # other*. One seat's collapse was materially accelerated by wolves.
     #
     # Not removed, because a world with no threat makes early military pointless
-    # and hands an unearned advantage to whoever builds none. Turned down to a
-    # third, and made a knob so the next run can ask what it is worth rather
-    # than inheriting a number nobody chose.
-    wilderness: float = 0.34
+    # and hands an unearned advantage to whoever builds none.
+    #
+    # **The default stays at 1.0 even though no new run uses it**, and that is
+    # deliberate. `MatchConfig` is part of `State` and therefore part of the
+    # state hash, and a journal written before this field existed has no key for
+    # it - so `model_validate` fills in whatever the default happens to be. Set
+    # the default to the new value and every prior match replays as a *different
+    # match*, silently, because the RNG stream shifts with the spawn rate.
+    # `rebuild_bundle` caught it on the first attempt, refusing to write a bundle
+    # for a match that did not happen.
+    #
+    # So the engine default preserves history and the *experiment* opts in:
+    # `scripts/run_match.py` sets 0.34 for new runs.
+    #
+    # Even so, **adding this field at all invalidates re-verification of every
+    # journal written before it existed** - `canonical_json` dumps the whole
+    # config, so one more key changes every hash regardless of its value.
+    # Excluding it from the dump makes those old journals verify again and is
+    # the wrong fix: the setting would then go unrecorded, and a match played at
+    # 0.34 would rebuild at 1.0 and diverge instead. Better to break re-verifying
+    # the past than to quietly mis-replay the future.
+    #
+    # Bundles already on disk are unaffected - they keep the frames they were
+    # written with. What is lost is the ability to *regenerate* them, which is
+    # the price of changing anything inside the state hash and the reason to do
+    # it rarely and deliberately.
+    wilderness: float = 1.0
 
     recent_events_size: int = 10
 
