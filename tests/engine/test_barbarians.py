@@ -341,3 +341,42 @@ def test_the_early_game_now_carries_real_threat() -> None:
 
     assert counts["unit_spawned"] > 0, "no wilderness appeared at all"
     assert counts["combat_resolved"] > 0, "the opening was still risk-free"
+
+
+# ---------------------------------------------------------------------------
+# What a wilderness attack reports
+# ---------------------------------------------------------------------------
+
+
+def test_a_wilderness_attack_reports_the_same_facts_as_a_civs_attack() -> None:
+    """The payload is the record, and half of it was missing.
+
+    A civ's attack carries `defender_owner`, both unit types and both death
+    flags. The wilderness attack carried none of them, and the replay bundle
+    keys its combat feed on `attacker_type` - so every blow struck by a wolf
+    was dropped on the way to the viewer.
+
+    In the first complete match that was 75 of 103 fights. Three quarters of
+    all violence in the world was invisible downstream, and a civ being mauled
+    by wolves rendered identically to one at peace. Nothing failed; the panels
+    drew a smaller number with total confidence.
+
+    Asserted field by field rather than by comparing to a civ attack, because
+    the bug was an omission and a test that only checks "some payload exists"
+    would have passed against the broken version.
+    """
+    state = flat_state()
+    wolf = put(state, BARBARIAN_ID, UnitType.WOLF, hx.ORIGIN)
+    scout = put(state, "p1", UnitType.SCOUT, Hex(1, 0))
+
+    out: list = []
+    barbarians._strike(state, wolf, scout, out)
+
+    strikes = [e for e in out if e.type == "combat_resolved"]
+    assert strikes, "a wilderness attack must report itself"
+    payload = strikes[0].payload
+    assert payload["defender_owner"] == "p1"
+    assert payload["attacker_type"] == UnitType.WOLF.value
+    assert payload["defender_type"] == UnitType.SCOUT.value
+    for flag in ("attacker_died", "defender_died"):
+        assert flag in payload, f"{flag} missing: the bundle cannot tell who survived"

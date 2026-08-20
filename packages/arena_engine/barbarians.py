@@ -310,8 +310,20 @@ def _strike(state: State, attacker: Unit, defender: Unit, out: list[Event]) -> N
             actor=BARBARIAN_ID,
             attacker=attacker.id,
             defender=best.id,
+            # The same payload a civ's attack carries. Without it the bundle
+            # drops this fight entirely - its combat feed keys on
+            # `attacker_type` - and every panel downstream reported only the
+            # fights a civ chose to start. In the first complete match that was
+            # 28 of 103 blows struck: three quarters of all violence in the
+            # world was invisible to the viewer, and a civ being mauled by
+            # wolves looked identical to one at peace.
+            defender_owner=victim_owner,
+            attacker_type=attacker.type.value,
+            defender_type=best.type.value,
             attacker_damage=result.attacker_damage,
             defender_damage=result.defender_damage,
+            attacker_died=result.attacker_died,
+            defender_died=result.defender_died,
         )
     )
     if result.defender_died:

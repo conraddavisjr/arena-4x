@@ -542,9 +542,112 @@ not prompt anyone to look.
   bundle, which is now the habit.
 - **A block placed above the values it read** threw a temporal-dead-zone error
   on every render, and the page absorbed it by not drawing the sections below.
+- **A column with no room is a column that says nothing.**
+  Replacing `p1..p4` with real model ids made the cost table unreadable: six
+  numeric columns took 273 of the panel's 331 pixels and left the model name
+  59, so every row identified itself as `cl...`.
+  Two rows both truncated to `g...`.
+  The name also had no ellipsis, because the flex wrapper inside the cell
+  swallowed the one on the cell itself - so it clipped mid-glyph and did not
+  even look truncated.
+  The fix was to shorten the *headers*, which each already carry a full
+  sentence on hover, rather than the data.
+  Worth stating because the reflex is to shorten the identifier, which is the
+  one thing on the row that cannot be recovered from context.
+- **Two boards at once, and only a moving label revealed it.** `drawTurn`
+  cleared the scene, then awaited the fold, then drew. A scrub during the fold
+  started a second draw that cleared and drew correctly - and then the first one
+  resumed and added its stale geometry behind it.
+  The duplicates coincide wherever nothing moved, so a city on the same tile in
+  both turns drew twice in the same place and looked like one city.
+  It survived every previous panel because everything drawn was either static
+  or overlapping. It became visible the moment a nameplate was planted on a
+  wandering army, which is somewhere different every turn: the board showed the
+  same empire twice, in two places, one of them several turns out of date.
+  Fixed with a sequence number checked after the await. The lesson is about
+  where to look rather than about renderers - the bug was years-old in project
+  time and was found by adding a feature that happened to move.
+- **The wilderness got a nameplate.** It is modelled as a player so combat and
+  movement work unchanged, so it owns units, so a label keyed on unit ownership
+  named it. The engine's own test file opens by warning about exactly this and
+  the viewer made the mistake anyway, which says the warning needs to be a
+  helper rather than a paragraph.
 
-The rule both suggest: a `return` is only trustworthy in a function that does
-one thing. Both blocks are their own functions now.
+The first two suggest a rule: a `return` is only trustworthy in a function that
+does one thing. Both blocks are their own functions now.
+
+The last two suggest another, and it is the more useful one. Three of the five
+were invisible until something *moved* - a label on a wandering army, a name on
+a roaming wolf pack, a column that had to hold a real string. A viewer tested
+only against a settled board tests almost nothing.
+
+---
+
+## A pytest marker that does not exist excludes nothing
+
+`pyproject.toml` sets `addopts = "-m 'not contract'"` so the paid contract
+tests stay out of the default run.
+Passing `-m "not live"` on the command line - a marker this project has never
+defined - **overrode that**, because a later `-m` replaces the earlier one, and
+`not live` is true of every test in the suite.
+The command that was meant to be *more* cautious than the default selected the
+live provider tests instead.
+
+Nothing failed loudly: the contract tests skip themselves when a key is absent,
+and the keys are present here, so the only signal would have been the bill.
+
+The rule: never pass `-m` to this suite.
+The default already excludes what costs money, and any `-m` silently discards
+that default.
+`make contracts` is the deliberate way in.
+
+---
+
+## Three quarters of the violence never reached the viewer
+
+Every panel that counts fighting was counting a quarter of it.
+
+A civ's attack emits `combat_resolved` carrying `defender_owner`, both unit
+types and both death flags.
+The wilderness emits the same event type from `barbarians._strike` with none of
+those fields.
+The bundle's combat feed keys on `attacker_type`, so it silently kept the civ
+attacks and dropped every wilderness one: **28 of 103 blows struck in the first
+complete match**.
+
+The consequence was not a missing panel but a confident wrong one.
+A civ mauled by wolves thirty times rendered identically to a civ at peace,
+and the Signals combat bar - whose whole job is "who is being worn down" -
+answered with the subset of fights that happened to carry a type field.
+
+It also inverted a headline.
+Counting only what the bundle carried, the match looked like 20 fights against
+the wilderness and 8 between civs, a ratio of 2.5.
+The true figure is 95 and 8, a ratio of 11.9 - the same finding, four times
+understated, and it was about to go into a public post at the wrong number.
+
+The event payload is now identical on both paths, and a test asserts each field
+by name rather than asserting that some payload exists - the bug was an
+omission, and a shape check would have passed against it.
+
+Bundles built before the fix cannot be repaired, because the journal never had
+the fields.
+The viewer therefore reads wilderness-initiated fights from the events for those
+matches, and skips the fallback when it sees a bundle whose `combat` already
+contains a wilderness attacker.
+
+### Treaty paperwork was being counted as conversation
+
+Smaller, same shape.
+`frame.messages` carries three kinds - `message`, `proposal`, `reply` - and the
+fold counted all three as things a civ said.
+That reported 585 private messages against a real 481, and made a civ that
+negotiated a lot look like a civ that talked a lot.
+Proposals are counted where they mean something, which is the diplomacy tally.
+
+The rule both share: when one producer writes a record and another reads it by
+looking for a field, the reader silently defines what counts.
+Neither of these threw, logged, or drew an empty box.
 
 ---
 

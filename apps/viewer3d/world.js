@@ -1563,6 +1563,199 @@ function banner(partners, colourOf) {
   return tex;
 }
 
+/**
+ * A nameplate over each empire's seat, so the board answers "who is blue".
+ *
+ * Colour alone has been carrying identity on the map since the beginning, and
+ * it only works if you have already read a panel - the board itself never said
+ * that blue was Gemini. Every question about the replay starts with knowing
+ * who you are looking at, so the answer belongs on the surface you are looking
+ * at rather than in a table beside it.
+ *
+ * Two lines: the family in large type, because from an orbiting camera the
+ * useful token is "Claude" rather than "claude-haiku-4-5", and the exact model
+ * id small underneath, because which Claude is the whole point of the
+ * experiment. The plate is *filled* with the civ's colour rather than outlined
+ * in it - an outline reads as decoration, a fill reads as identity, and the
+ * fill is what ties the name to the borders and unit rings in one glance.
+ *
+ * Planted over the empire's largest city. No bundle carries a capital flag, and
+ * the biggest city is both a good guess at the seat and the one with the most
+ * geometry under it to hang a label on. `Sprite` for the same reason the pact
+ * banner uses one: the camera orbits, and a flat plane is edge-on and
+ * unreadable for half of every turn.
+ */
+export function buildNameplates(cities, units, nameOf, locate, colourOf) {
+  const group = new THREE.Group();
+
+  // One seat per empire: most populous, and on a tie the earliest tile index,
+  // so the plate does not hop between two equal cities as the turns advance.
+  const seat = new Map();
+  for (const city of cities) {
+    const held = seat.get(city.owner);
+    const better = !held || city.population > held.population
+      || (city.population === held.population && city.at < held.at);
+    if (better) seat.set(city.owner, city);
+  }
+
+  // An empire that holds no city still needs naming, and keying only on cities
+  // meant it went unnamed for exactly the stretches where the question is
+  // loudest. In the first complete match one civ wandered nineteen turns before
+  // it founded anything - the whole opening, with five units on the board and
+  // nothing on the map saying whose they were - and then lost its only city and
+  // went unnamed again on its way out. So a civ with no city is planted among
+  // its units instead.
+  const camp = new Map();
+  for (const u of units || []) {
+    if (seat.has(u.owner)) continue;
+    if (!camp.has(u.owner)) camp.set(u.owner, []);
+    camp.get(u.owner).push(u.at);
+  }
+
+  const spots = [...seat].map(([who, city]) => [who, city.at]);
+  for (const [who, tiles] of camp) spots.push([who, medoid(tiles, locate)]);
+  if (!spots.length) return group;
+
+  for (const [who, tile] of spots) {
+    const [x, y, z] = locate(tile);
+    const face = nameplate(nameOf(who), colourOf(who));
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: face,
+      // Over the town rather than through it. A plate half-buried in a keep it
+      // is labelling is worse than one tile of occlusion.
+      depthTest: false,
+      transparent: true,
+    }));
+    // Sized against the grid rather than the texture, as the pact banner is,
+    // and a little smaller than one: there are four of these and only ever one
+    // or two of those, so they have to coexist without becoming the board.
+    // Height is fixed and width follows the texture, so "GPT" gets a compact
+    // pill and "gemini-3.6-flash" a wide one. A fixed width made every plate as
+    // wide as the longest name on the board and left the short ones swimming in
+    // their own colour, which read as a button rather than a label.
+    const H = 1.62;
+    sprite.scale.set(H * (face.image.width / face.image.height), H, 1);
+    // High enough to clear a walled city with a keep in it, and high enough to
+    // separate on screen from a pact banner planted nearby. At 1.6 the plate
+    // sat in the rooftops of the very town it was labelling.
+    sprite.position.set(x, y + 2.6, z);
+    // Above the pact banner in the draw order, because if the two ever land on
+    // the same town, who this is outranks who they have promised not to fight.
+    sprite.renderOrder = 11;
+    group.add(sprite);
+  }
+  return group;
+}
+
+/**
+ * The tile nearest the centre of a scattered group.
+ *
+ * The mean is not usable: a civ with units on two sides of a mountain has a
+ * mean somewhere inside the mountain, and a label planted there belongs to
+ * neither half. The medoid is always one of the actual positions.
+ */
+function medoid(tiles, locate) {
+  if (tiles.length === 1) return tiles[0];
+  const at = tiles.map((t) => [t, locate(t)]);
+  const cx = at.reduce((a, [, p]) => a + p[0], 0) / at.length;
+  const cz = at.reduce((a, [, p]) => a + p[2], 0) / at.length;
+  let best = tiles[0];
+  let bestD = Infinity;
+  for (const [t, p] of at) {
+    const d = (p[0] - cx) ** 2 + (p[2] - cz) ** 2;
+    if (d < bestD) { bestD = d; best = t; }
+  }
+  return best;
+}
+
+const plates = new Map();
+
+/**
+ * The plate face: family, model id, and a tick pointing at the town below.
+ *
+ * The tick matters more than it looks. A floating label over a crowded board
+ * belongs to whichever town the eye picks, and on a tight cluster of cities
+ * that is a coin toss - the tick makes the claim explicit.
+ */
+function nameplate(name, colour) {
+  const key = `${name}|${colour}`;
+  if (plates.has(key)) return plates.get(key);
+
+  const FAMILY_FONT = "bold 46px ui-sans-serif, system-ui, sans-serif";
+  const ID_FONT = "500 24px ui-sans-serif, system-ui, sans-serif";
+  const c = document.createElement("canvas");
+  const g = c.getContext("2d");
+
+  // Measured before the canvas is sized, so the plate is as wide as its own
+  // name and no wider.
+  g.font = FAMILY_FONT;
+  const wide = g.measureText(family(name)).width;
+  g.font = ID_FONT;
+  const W = Math.ceil(Math.max(wide, g.measureText(String(name)).width)) + 52;
+  const H = 128;
+  c.width = W;
+  c.height = H;
+  const hex = `#${colour.toString(16).padStart(6, "0")}`;
+
+  const BODY = 100;
+  g.fillStyle = hex;
+  g.strokeStyle = "rgba(11,15,20,0.85)";
+  g.lineWidth = 5;
+  round(g, 4, 4, W - 8, BODY - 8, 18);
+  g.fill();
+  g.stroke();
+
+  // The tick, drawn in the same fill so plate and pointer read as one object.
+  g.beginPath();
+  g.moveTo(W / 2 - 16, BODY - 8);
+  g.lineTo(W / 2 + 16, BODY - 8);
+  g.lineTo(W / 2, H - 5);
+  g.closePath();
+  g.fillStyle = hex;
+  g.fill();
+  g.stroke();
+
+  // Near-black on the fill rather than white. All four palette colours are
+  // light enough that white text on them is the low-contrast direction, and
+  // dark text keeps every plate legible without a per-colour exception.
+  const ink = "#0b0f14";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillStyle = ink;
+  g.font = FAMILY_FONT;
+  g.fillText(family(name), W / 2, 38);
+
+  g.fillStyle = "rgba(11,15,20,0.74)";
+  g.font = ID_FONT;
+  g.fillText(String(name), W / 2, 76);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  plates.set(key, tex);
+  return tex;
+}
+
+/**
+ * The vendor family a model id belongs to.
+ *
+ * Prefix matching rather than an exact table, because the roster changes every
+ * time a vendor ships and a label that silently falls back to the raw id on an
+ * unknown model is better than one that has to be edited to keep working.
+ */
+const FAMILIES = [
+  ["claude", "Claude"], ["gpt", "GPT"], ["o1", "GPT"], ["o3", "GPT"],
+  ["gemini", "Gemini"], ["grok", "Grok"],
+];
+
+function family(name) {
+  const id = String(name).toLowerCase();
+  for (const [prefix, label] of FAMILIES) if (id.startsWith(prefix)) return label;
+  // Unknown vendor: the first token, which for every id shaped like
+  // `vendor-model-version` is the vendor.
+  const head = String(name).split(/[-_ ]/)[0];
+  return head.charAt(0).toUpperCase() + head.slice(1);
+}
+
 function round(g, x, y, w, h, r) {
   g.beginPath();
   g.moveTo(x + r, y);

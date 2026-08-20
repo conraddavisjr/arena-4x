@@ -141,14 +141,82 @@
      the live thread ring - so the eye learns one colour rather than three. */
   td.moved{color:#4ade80;font-weight:600}
   td.moved .arrow-up{font-size:8px;margin-left:3px;vertical-align:top}
+  /* The science race and the war fronts. Both live under Signals because they
+     answer the same question the panel exists for: who is quietly winning. */
+  .race{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+  .racehead{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--dim);margin-bottom:5px}
+  .racehead .meta{text-transform:none;letter-spacing:0;margin-left:6px;cursor:help;
+    text-decoration:underline dotted var(--faint);text-underline-offset:2px}
+  .racerow{display:grid;grid-template-columns:9px 90px 1fr auto;gap:6px;
+    align-items:center;margin:3px 0;font-size:11px}
+  .racename{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .racenote{color:var(--faint);font-size:10px;white-space:nowrap}
+  /* A civ one build from ending the match is the most urgent fact on screen. */
+  .racenote.close{color:#fbbf24;font-weight:600}
+  .front{display:grid;grid-template-columns:9px auto 1fr auto 9px;gap:5px;
+    align-items:center;margin:4px 0;font-size:11px}
+  .frontname{white-space:nowrap;max-width:78px;overflow:hidden;text-overflow:ellipsis}
+  .frontname.right{text-align:right}
+  .slider{position:relative;display:flex;height:9px;border-radius:5px;overflow:hidden;
+    background:#1b222c}
+  .slider i{display:block;height:100%}
+  /* The midpoint marker, so "leaning" is readable rather than estimated. */
+  .slider b{position:absolute;top:-2px;width:2px;height:13px;background:var(--ink);
+    opacity:.65;transform:translateX(-1px)}
+  /* A coordinate or unit id the board can point at. Subtle until hovered -
+     these appear many times per paragraph and must not turn prose into
+     confetti. */
+  .ref{border-bottom:1px dotted #6b7a8d;cursor:pointer;border-radius:3px;
+    padding:0 2px;transition:background .08s}
+  .ref:hover{background:#ffd16633;border-bottom-color:#ffd166;color:#ffe9b0}
+  .ref.unit{border-bottom-style:solid}
+  .ref.gone{border-bottom-color:#4d5560;color:var(--faint);cursor:help}
+  /* Charts. Inline SVG and flexbox - no library, because the published artifact
+     has to open offline with no external requests. */
+  .chart{display:flex;gap:10px;align-items:center;margin-top:10px;
+    padding-top:8px;border-top:1px solid var(--line)}
+  .charthead{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--dim);margin-bottom:4px}
+  .dtotal{fill:var(--ink);font-size:15px;font-weight:600;text-anchor:middle;
+    dominant-baseline:central;font-variant-numeric:tabular-nums}
+  .sharelist{flex:1;min-width:0}
+  .sharerow{display:grid;grid-template-columns:9px 1fr auto auto;gap:6px;
+    align-items:center;font-size:11px;margin:2px 0}
+  .sharename{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sharenum{color:var(--dim);font-variant-numeric:tabular-nums}
+  .sharepct{color:var(--faint);width:30px;text-align:right;font-variant-numeric:tabular-nums}
+  .ygrid{display:flex;gap:10px}
+  .ygroup{flex:1;min-width:0}
+  .ylabel{font-size:10px;color:var(--faint);text-align:center;margin-bottom:3px;
+    cursor:help}
+  /* Each group scales to its own leader: gold and science are different units,
+     and a shared axis would flatten science to nothing. */
+  .ybars{display:flex;gap:2px;align-items:flex-end;height:38px}
+  .ybar{flex:1;display:flex;align-items:flex-end;height:100%;background:#161c24;
+    border-radius:2px;overflow:hidden}
+  .ybar i{display:block;width:100%;border-radius:2px;min-height:2px}
+  /* Insights. A figure large enough to read at a glance and a sentence that
+     stops it being read as more than it is. */
+  .insight{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .insight:last-of-type{border-bottom:0}
+  .ifig{flex:0 0 74px;font-size:17px;font-weight:600;line-height:1.15;
+    color:var(--ink);font-variant-numeric:tabular-nums;padding-top:1px}
+  .insight.good .ifig{color:#4ade80}
+  .insight.warn .ifig{color:#fbbf24}
+  .insight.bad .ifig{color:#f87171}
+  .ibody{min-width:0}
+  .ilabel{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--dim);margin-bottom:3px}
+  .ibody p{margin:0;font-size:12px;line-height:1.5;color:var(--ink)}
   td .n{margin-left:6px;color:var(--faint);font-size:11px}
   td.hurt{color:#f87171;font-weight:600}
   .picker{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
   button.who-btn{font-size:11px;padding:3px 7px}
   table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
-  th,td{text-align:right;padding:3px 4px}
+  th,td{text-align:right;padding:3px 4px;white-space:nowrap}
   th:first-child,td:first-child{text-align:left}
-  td.name{width:42%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  td.name{width:44%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   thead th{color:var(--dim);font-weight:500;font-size:11px;border-bottom:1px solid var(--line)}
   thead th[title]{cursor:help;text-decoration:underline dotted var(--faint);
     text-underline-offset:3px}
@@ -182,7 +250,14 @@
   /* A tick rather than a highlight alone, so the current view survives being
      read at a glance or in a screenshot. */
   #viewMenu button[aria-checked="true"]::after{content:"✓";margin-left:auto;color:#4ade80}
-  .civ{display:flex;align-items:center;gap:6px}
+  .civ{display:flex;align-items:center;gap:6px;min-width:0}
+  .civ .dot{flex:0 0 auto}
+  .civ>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* The name keeps its line; tags wrap underneath it. Long tag text was
+     squeezing "gpt-5.4-mini" into three wrapped lines. */
+  .sigrow .who{flex-wrap:wrap;row-gap:4px}
+  .sigrow .who > .dot{flex:none}
+  .sigrow .tags{flex:1 1 100%;display:flex;flex-wrap:wrap;gap:4px}
   .dot{width:9px;height:9px;border-radius:50%;flex:none}
   .dead{opacity:.4;text-decoration:line-through}
   .neg{color:#f87171}.pos{color:#4ade80}
@@ -313,6 +388,7 @@
   <details open><summary>Reasoning<i id="n-reasoning"></i></summary><div id="reasoning"></div></details>
   <details><summary>Dossier<i id="n-dossier"></i></summary><div id="dossier"></div></details>
   <details><summary>Diplomacy<i id="n-messages"></i></summary><div id="messages"></div></details>
+  <details><summary>AI insights<i id="n-insights"></i></summary><div id="insights"></div></details>
   <details><summary>Events<i id="n-events"></i></summary><div id="events"></div></details>
   <details><summary>Signals<i id="n-signals"></i></summary><div id="signals"></div></details>
 </aside>
@@ -335,8 +411,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/OrbitControls.js";
 import {
-  HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, axialToWorld,
+  HEIGHT, GROUND, CIV_COLOURS, WILD_COLOUR, HEX, axialToWorld,
   buildTerrain, buildScatter, buildResources, buildBorders, buildSettlements, buildPacts,
+  buildNameplates,
   unitModel, baseGeometry, surfaceAtlas,
 } from "./world.js";
 
@@ -347,7 +424,8 @@ const UNIT_TYPES = ["settler","worker","scout","warrior","archer","spearman",
 
 const S = { match:null, frame:null, turn:1, mode:"god", focus:null, playing:null,
             index:null, expanded:null, dossiers:{}, dossiersBefore:{}, priorTrust:{},
-            threads:null, thread:null, spend:{}, signals:{}, dossierOf:"all", combatOf:null };
+            threads:null, thread:null, spend:{}, signals:{}, world:null,
+            dossierOf:"all", combatOf:null };
 const cache = new Map();
 const $ = (id) => document.getElementById(id);
 const civOf = (id) => S.match.civs.find((c) => c.player_id === id);
@@ -399,7 +477,76 @@ scene.add(sun);
 
 const staticLayer = new THREE.Group();   // terrain, scatter - built once
 const dynamicLayer = new THREE.Group();  // units, cities, borders - per turn
-scene.add(staticLayer, dynamicLayer);
+const pointerLayer = new THREE.Group();  // the hover marker, never rebuilt
+scene.add(staticLayer, dynamicLayer, pointerLayer);
+
+/**
+ * The marker that answers "which tile is it talking about".
+ *
+ * Agents write in coordinates - "move settler u64 to (-8,0)" - which is precise
+ * and unreadable: finding (-8,0) on a 1027-tile hex board by eye takes longer
+ * than reading the sentence. So the sentence points at the board instead.
+ *
+ * A ring on the tile *and* an arrow above it. The ring alone is easy to lose
+ * against terrain at low zoom; the arrow is visible from any angle and reads as
+ * deixis rather than decoration. Built once and moved, rather than rebuilt per
+ * hover, because hovering a paragraph fires this dozens of times a second.
+ */
+const marker = (() => {
+  const group = new THREE.Group();
+  // `fog: false` matters more than it looks. Scene fog is tuned to make distant
+  // terrain recede, and a marker that recedes with it is useless at exactly the
+  // moment you need it - pointing at something far from the camera.
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(HEX * 0.72, HEX * 1.08, 6),
+    new THREE.MeshBasicMaterial({
+      color: 0xffd166, transparent: true, opacity: 0.95,
+      side: THREE.DoubleSide, depthTest: false, fog: false,
+    })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  // Flat-topped to match the tiles, which are drawn without rotation.
+  ring.rotation.z = Math.PI / 6;
+  ring.renderOrder = 20;
+  // Sized to be findable from across the board. The ring alone was correct and
+  // nearly invisible at default zoom, which is the only zoom most people use.
+  const arrow = new THREE.Mesh(
+    new THREE.ConeGeometry(HEX * 0.42, HEX * 1.1, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffd166, depthTest: false, fog: false })
+  );
+  arrow.rotation.x = Math.PI;   // point down at the tile
+  arrow.renderOrder = 20;
+  group.add(ring, arrow);
+  group.visible = false;
+  group.renderOrder = 20;
+  pointerLayer.add(group);
+  return { group, arrow };
+})();
+
+let markerBob = 0;
+
+function pointAt(tileIndex) {
+  if (tileIndex == null || !S.match) return clearPointer();
+  const key = S.match.tiles[tileIndex];
+  if (key === undefined) return clearPointer();
+  const [q, r] = key.split(",").map(Number);
+  const [x, , z] = axialToWorld(q, r);
+  const y = topOf(tileIndex);
+  marker.group.position.set(x, y + 0.02, z);
+  marker.arrow.position.y = 1.6;
+  marker.group.visible = true;
+}
+
+function clearPointer() {
+  marker.group.visible = false;
+}
+
+/** Tile index for a `"q,r"` key, or null if it is off the map. */
+function tileAt(key) {
+  const i = S.tileIndex?.get(key);
+  return i === undefined ? null : i;
+}
+
 
 function resize() {
   const { clientWidth: w, clientHeight: h } = stage;
@@ -411,6 +558,10 @@ addEventListener("resize", resize);
 
 (function loop() {
   requestAnimationFrame(loop);
+  if (marker.group.visible) {
+    markerBob += 0.09;
+    marker.arrow.position.y = 1.6 + Math.sin(markerBob) * 0.16;
+  }
   controls.update();
   renderer.render(scene, camera);
 })();
@@ -480,6 +631,7 @@ async function foldTo(turn) {
   const sig = (pid) => (signals[pid] ??= {
     said: 0, dm: 0, lostToWild: 0, sacked: 0, met: new Set(),
     fights: 0, kills: 0, losses: 0, wildFights: 0, log: [],
+    lessons: 0, commitments: 0, rivalsModelled: 0, notes: 0,
   });
   // The last view each agent expressed about each rival, whenever it expressed
   // it. Not the same as "what its dossier said last turn": agents rewrite the
@@ -487,6 +639,15 @@ async function foldTo(turn) {
   // several turns and come back revised. Diffing only against the previous turn
   // missed every one of those - which is most of them.
   const priorTrust = {};
+  // Match-wide tallies, as opposed to the per-civ ones above. Kept separate
+  // rather than summed out of `signals` at render time because combat is
+  // recorded against both participants there - summing it would report every
+  // fight twice and quietly double the one number the Insights panel leans on
+  // hardest.
+  const world = {
+    pub: 0, priv: 0, rivalFights: 0, wildFights: 0,
+    proposals: {}, signed: 0, wars: [], gone: [], firstContact: null,
+  };
   for (let t = 1; t <= turn; t++) {
     const f = await loadFrame(t);
     for (const [i, who] of Object.entries(f.owners || {})) owners[+i] = who;
@@ -501,10 +662,17 @@ async function foldTo(turn) {
         }
       }
     }
+    // `messages` carries three kinds: what a civ chose to say, and the notes
+    // attached to proposals and replies. Counting all three as "talk" inflated
+    // every seat's private total by its treaty paperwork - 585 against a real
+    // 481 in the first complete match - and made a civ that negotiated a lot
+    // look like a civ that talked a lot. The proposals are counted separately,
+    // where they mean something.
     for (const m of f.messages || []) {
       const row = sig(m.from);
+      if (m.kind && m.kind !== "message") { row.notes += 1; continue; }
       row.said += 1;
-      if (m.channel === "private") row.dm += 1;
+      if (m.channel === "private") { row.dm += 1; world.priv += 1; } else world.pub += 1;
     }
     for (const e of f.events || []) {
       if (!e.actor) continue;
@@ -515,7 +683,20 @@ async function foldTo(turn) {
       if (e.type === "unit_killed" && e.text.includes("wilderness")) row.lostToWild += 1;
       if (e.type === "city_sacked") row.sacked += 1;
 
+      // Proposals and treaties are carried as prose, not structure, so they
+      // are read the same way `first_contact` is. The type is the interesting
+      // half: four kinds are on offer and a match that only ever uses one is
+      // saying something about all four models at once.
+      if (e.type === "proposal_made") {
+        const kind = /proposed (\w+)/.exec(e.text)?.[1] || "unknown";
+        world.proposals[kind] = (world.proposals[kind] || 0) + 1;
+      }
+      if (e.type === "treaty_signed") world.signed += 1;
+      if (e.type === "war_declared") world.wars.push({ turn: t, text: e.text });
+      if (e.type === "player_eliminated") world.gone.push({ turn: t, who: e.actor });
+
       if (e.type === "first_contact") {
+        if (world.firstContact == null) world.firstContact = t;
         const other = S.match.civs.find((c) => e.text.includes(c.civ_name) && c.player_id !== e.actor);
         if (other) row.met.add(other.player_id);
       }
@@ -523,6 +704,21 @@ async function foldTo(turn) {
     // Combat, from both sides. A fight is recorded against attacker and
     // defender alike, because "who is being worn down" is the question, and a
     // civ that is only ever attacked never appears in a list keyed by actor.
+    // Fights the wilderness started. Bundles built before the engine learned to
+    // report them carry only the fights a *civ* chose to start, which in the
+    // first complete match was 28 of 103 blows - so a panel reading `combat`
+    // alone reported a quarter of the violence in the world and said nothing
+    // about the rest. The events always carried it, so they are the fallback,
+    // and a bundle that already has wilderness attacks in `combat` skips it
+    // rather than counting them twice.
+    const anyWild = (f.combat || []).some(
+      (c) => c.attacker && !S.match.civs.some((x) => x.player_id === c.attacker));
+    if (!anyWild) {
+      for (const e of f.events || []) {
+        if (e.type !== "combat_resolved") continue;
+        if (e.actor && !S.match.civs.some((x) => x.player_id === e.actor)) world.wildFights += 1;
+      }
+    }
     for (const c of f.combat || []) {
       const wild = (pid) => pid && !S.match.civs.some((x) => x.player_id === pid);
       for (const [me, them, iDied, theyDied] of [
@@ -530,6 +726,8 @@ async function foldTo(turn) {
         [c.defender, c.attacker, c.defender_died, c.attacker_died],
       ]) {
         if (wild(me) || !me) continue;
+        // Counted once per fight, from the attacker's side only.
+        if (me === c.attacker) (wild(them) ? world.wildFights++ : world.rivalFights++);
         const row = sig(me);
         row.fights += 1;
         if (wild(them)) row.wildFights += 1;
@@ -550,12 +748,29 @@ async function foldTo(turn) {
         acc.effortBefore = acc.effort ?? null;
         acc.effort = row.effort;
         acc.effortSent = row.effort_sent || row.effort;
+        (acc.efforts ??= new Set()).add(row.effort);
       }
+      // Output tokens per turn, kept as a series. The *declared* dial is one of
+      // three words and, on a fixed-effort match, never moves - so charting its
+      // variation would draw four flat lines and call it a finding. What
+      // actually varies is how much each model spends thinking, turn to turn,
+      // and that varies enormously: measured across seats, a factor of thirty.
+      (acc.perTurn ??= []).push(row.output || 0);
     }
     before = dossiers;
     dossiers = { ...dossiers, ...(f.dossiers || {}) };
+    // What each civ is carrying in its own memory, as of this turn. A count
+    // rather than the text, because the question the panel answers is "is this
+    // one learning anything" - a civ at nine lessons and one at zero are
+    // playing differently, and that is visible long before the text is read.
+    for (const [pid, d] of Object.entries(dossiers)) {
+      const row = sig(pid);
+      row.lessons = (d.lessons || []).length;
+      row.commitments = (d.standing_commitments || []).length;
+      row.rivalsModelled = (d.opponent_models || []).length;
+    }
   }
-  return { owners, explored, dossiers, before, priorTrust, spend, signals };
+  return { owners, explored, dossiers, before, priorTrust, spend, signals, world };
 }
 
 // --- rendering -------------------------------------------------------------
@@ -604,14 +819,35 @@ function applyFog(lit, explored) {
   for (const layer of staticLayer.children) layer.userData.paint?.(shade);
 }
 
+/**
+ * Renders in flight. A scrub can start a draw while the previous one is still
+ * folding, and the fold is the slow part - on a long match it is hundreds of
+ * frames of I/O.
+ *
+ * Without this, the older draw resumes after the newer one has already cleared
+ * the layer and adds its stale geometry on top: two boards at once, one of them
+ * several turns out of date. It hid for a long time because the duplicates
+ * coincide wherever nothing moved - a city on the same tile in both turns draws
+ * twice in exactly the same place and looks like one city. It only became
+ * visible when a label was planted on a wandering army, which moves every turn,
+ * and the board showed two of the same empire in two places.
+ */
+let drawing = 0;
+
 async function drawTurn() {
   const f = S.frame;
+  const mine = ++drawing;
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
-  const { owners, explored, dossiers, before, priorTrust, spend, signals } = await foldTo(S.turn);
+  const { owners, explored, dossiers, before, priorTrust, spend, signals, world } = await foldTo(S.turn);
+  // A newer draw started while this one was folding. It has already cleared the
+  // layer and will draw the turn the user is actually on, so everything below
+  // would be stale geometry added behind its back.
+  if (mine !== drawing) return;
   S.spend = spend;
   S.signals = signals;
+  S.world = world;
   S.dossiers = dossiers;
   S.dossiersBefore = before;
   S.priorTrust = priorTrust;
@@ -637,7 +873,27 @@ async function drawTurn() {
   // Towns: plaza, buildings, a curtain wall if built, a keep for a temple or
   // wonder. Walls take their own baked colours; only the roofs carry the civ.
   const cities = f.cities.filter((c) => !lit || lit.has(c.at));
+  const visible = f.units.filter((u) => !lit || lit.has(u.at));
   dynamicLayer.add(buildSettlements(cities, (tile) => {
+    const [x, , z] = at(tile);
+    return [x, topOf(tile), z];
+  }, hexOf));
+
+  // Who each colour *is*, said on the board rather than only in the panels.
+  // Over the empire's largest city, or among its units when it holds no city -
+  // which is every civ for the first turns of a match, and a civ on its way out
+  // at the end of one.
+  //
+  // Fog applies for free: both lists are already filtered to what this seat can
+  // see, so in agent mode a rival's nameplate appears when you find them and
+  // not before - the same rule the borders and units follow.
+  // Civ units only. The wilderness is modelled as a player so that combat and
+  // movement work unchanged, which means it owns units, which meant it got a
+  // nameplate reading "Wilderness" planted on whichever wolf pack happened to
+  // be central. Every place that means "a rival civilisation" has to ask for
+  // civs specifically - the same trap the engine's own tests are mostly about.
+  const civUnits = visible.filter((u) => civOf(u.owner));
+  dynamicLayer.add(buildNameplates(cities, civUnits, nameOf, (tile) => {
     const [x, , z] = at(tile);
     return [x, topOf(tile), z];
   }, hexOf));
@@ -668,7 +924,6 @@ async function drawTurn() {
   }, hexOf));
 
   // Units, one instanced mesh per type plus a shared ownership ring.
-  const visible = f.units.filter((u) => !lit || lit.has(u.at));
   const bases = instanced(baseGeometry(), visible.length, { transparent: true, opacity: 0.9 });
   visible.forEach((u, n) => {
     const [x, , z] = at(u.at);
@@ -757,6 +1012,218 @@ function dossierPick(ev) {
  * effort it stops being configuration and becomes a move, and the turn a model
  * decides to think harder is then one of the more interesting events in a match.
  */
+/**
+ * Who is closest to ending the match by science.
+ *
+ * Worth its own meter because the science victory is the one that arrives
+ * without warning. A conquest builds visibly - armies move, cities change hands
+ * - while a research win is a number nobody was watching until the match stops.
+ * One did exactly that on turn 128 while the other three were signing pacts.
+ *
+ * `apex_tech` marks the point of no return: that civ needs only to build the
+ * project. Older bundles predate these fields, so the meter falls back to a
+ * plain tech count and says which it is showing rather than inventing certainty.
+ */
+/**
+ * How steadily each model thinks.
+ *
+ * Two different questions live here and only one has an interesting answer
+ * right now. The *declared* effort is a match-level setting - every seat is
+ * told `medium` - so its variation is zero by construction, and the panel says
+ * so rather than drawing four flat lines and implying a result.
+ *
+ * The measured question is how much each model actually spends per turn, and
+ * that swings hard: a seat may cruise for twenty turns and then think five
+ * times as long about a war. The bar is the spread - each seat's own
+ * turn-to-turn variation as a share of its median - so a steady seat reads
+ * short and a lurching one reads long, independent of whether it is an
+ * expensive model or a cheap one.
+ */
+function effortVariation(rows) {
+  const stats = rows.map(({ c, s }) => {
+    const series = (s.perTurn || []).filter((n) => n > 0);
+    if (series.length < 3) return null;
+    const sorted = [...series].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] || 1;
+    const mean = series.reduce((a, b) => a + b, 0) / series.length;
+    const sd = Math.sqrt(series.reduce((a, b) => a + (b - mean) ** 2, 0) / series.length);
+    return { c, cv: sd / Math.max(median, 1), median, peak: Math.max(...series) };
+  }).filter(Boolean);
+  if (!stats.length) return "";
+
+  const dials = new Set(rows.flatMap(({ s }) => [...(s.efforts || [])]));
+  const worst = Math.max(...stats.map((r) => r.cv)) || 1;
+  return `<div class="race">
+    <div class="racehead">thinking, turn to turn
+      <span class="meta" title="Each bar is that model's own variation in output
+        tokens per turn, relative to its own median - so it compares steadiness,
+        not size. A long bar means a model that sometimes thinks far harder than
+        usual; a short one means it spends about the same every turn.">${
+        dials.size > 1 ? "effort dial moved during this match" :
+        `declared effort fixed at ${[...dials][0] || "medium"} - this is measured spend`}</span></div>
+    ${[...stats].sort((a, b) => b.cv - a.cv).map((r) => `
+      <div class="racerow" title="median ${Math.round(r.median).toLocaleString()} output
+        tokens a turn, peak ${Math.round(r.peak).toLocaleString()}">
+        <span class="dot" style="background:${CSS[r.c.colour]}"></span>
+        <span class="racename">${esc(r.c.model || r.c.civ_name)}</span>
+        <span class="bars"><i style="width:${Math.round(100 * r.cv / worst)}%;
+          background:${CSS[r.c.colour]}"></i></span>
+        <span class="racenote">${r.cv.toFixed(2)}x</span></div>`).join("")}
+  </div>`;
+}
+
+function scienceRace(rows) {
+  const known = rows.map(({ c, e }) => ({
+    c,
+    techs: e.techs || 0,
+    apex: e.apex_tech === true,
+    built: e.apex_built === true,
+    exact: e.apex_tech !== undefined,
+  }));
+  const most = Math.max(1, ...known.map((r) => r.techs));
+  const exact = known.some((r) => r.exact);
+  const ranked = [...known].sort(
+    (a, b) => b.built - a.built || b.apex - a.apex || b.techs - a.techs
+  );
+  return `<div class="race">
+    <div class="racehead">science race
+      <span class="meta" title="How close each civ is to researching apex_theory and
+        building the apex_project. Completing it ends the match immediately and
+        everyone else loses, however many cities they hold.">${
+        exact ? "to the apex project" : "by techs known (older match)"}</span></div>
+    ${ranked.map((r) => {
+      const pct = r.built ? 100 : Math.round(100 * r.techs / most);
+      const note = r.built ? "BUILT - match over"
+        : r.apex ? "has apex_theory - one build away" : `${r.techs} techs`;
+      return `<div class="racerow" title="${esc(note)}">
+        <span class="dot" style="background:${CSS[r.c.colour]}"></span>
+        <span class="racename">${esc(r.c.model || r.c.civ_name)}</span>
+        <span class="bars"><i style="width:${pct}%;background:${CSS[r.c.colour]}"></i></span>
+        <span class="racenote ${r.apex || r.built ? "close" : ""}">${esc(note)}</span></div>`;
+    }).join("")}
+  </div>`;
+}
+
+/**
+ * For each pair at war, which way it is going.
+ *
+ * A single bar split between two civ colours, leaning toward whoever holds more
+ * military strength. Strength rather than headcount - ten warriors and ten
+ * swordsmen are the same number and not the same army - falling back to unit
+ * count on bundles written before `power` existed.
+ *
+ * Only pairs actually at war. A slider between civs at peace would be a
+ * comparison, not a front, and the panel already has those.
+ */
+function warFronts(rows) {
+  const by = Object.fromEntries(rows.map(({ c, e }) => [c.player_id, { c, e }]));
+  const fronts = Object.entries(S.frame.relations || {})
+    .filter(([, v]) => v.state === "war")
+    .map(([pair]) => pair.split("|"))
+    .filter(([a, b]) => by[a] && by[b]);
+  if (!fronts.length) return "";
+
+  const strength = (side) => side.e.power ?? (side.e.military || 0);
+  return `<div class="race">
+    <div class="racehead">wars
+      <span class="meta" title="Each bar is one war, split by military strength -
+        attack plus defence across every non-civilian unit. The bar leans toward
+        whoever is currently stronger. It measures the balance of force, not who
+        is winning the war on the map.">balance of force</span></div>
+    ${fronts.map(([a, b]) => {
+      const left = by[a], right = by[b];
+      const la = Math.max(0, strength(left)), lb = Math.max(0, strength(right));
+      const total = Math.max(1, la + lb);
+      const pct = Math.round(100 * la / total);
+      return `<div class="front">
+        <span class="dot" style="background:${CSS[left.c.colour]}"></span>
+        <span class="frontname">${esc(left.c.model || left.c.civ_name)}</span>
+        <span class="slider" title="${la} vs ${lb} strength">
+          <i style="width:${pct}%;background:${CSS[left.c.colour]}"></i>
+          <i style="width:${100 - pct}%;background:${CSS[right.c.colour]}"></i>
+          <b style="left:${pct}%"></b></span>
+        <span class="frontname right">${esc(right.c.model || right.c.civ_name)}</span>
+        <span class="dot" style="background:${CSS[right.c.colour]}"></span></div>`;
+    }).join("")}
+  </div>`;
+}
+
+/**
+ * A donut of shares, drawn as inline SVG.
+ *
+ * No chart library: the artifact has to be self-contained and open offline, so
+ * a CDN script is not an option and 40 lines of arc maths is cheaper than
+ * vendoring one. A donut rather than a pie because the hole gives the total
+ * somewhere to live, and the total is half the point - "$5.18 across four
+ * seats" and "one seat is 58% of it" are the two facts together.
+ *
+ * Slices under 2% still get drawn. A seat spending almost nothing is exactly
+ * the comparison worth seeing, and rounding it away would flatter it.
+ */
+function donut(slices, { size = 108, label = "", centre = null } = {}) {
+  const total = slices.reduce((a, s) => a + Math.max(0, s.value), 0);
+  if (total <= 0) return "";
+  const r = size / 2 - 2;
+  const inner = r * 0.58;
+  let angle = -Math.PI / 2;
+  const arcs = slices.map((s) => {
+    const frac = Math.max(0, s.value) / total;
+    // A single slice would produce a zero-length arc and vanish, so a full
+    // circle is drawn as two half arcs.
+    const sweep = frac >= 1 ? Math.PI * 1.999 : frac * Math.PI * 2;
+    const from = angle;
+    const to = (angle += sweep);
+    const big = sweep > Math.PI ? 1 : 0;
+    const pt = (rad, a) => `${(size / 2 + rad * Math.cos(a)).toFixed(2)} ${(size / 2 + rad * Math.sin(a)).toFixed(2)}`;
+    const d = `M ${pt(r, from)} A ${r} ${r} 0 ${big} 1 ${pt(r, to)}`
+      + ` L ${pt(inner, to)} A ${inner} ${inner} 0 ${big} 0 ${pt(inner, from)} Z`;
+    return `<path d="${d}" fill="${s.colour}" opacity="0.92"
+      title="${esc(s.name)} ${Math.round(frac * 100)}%"></path>`;
+  }).join("");
+  const middle = centre
+    ? `<text x="${size / 2}" y="${size / 2}" class="dtotal">${esc(centre(total))}</text>`
+    : "";
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}"
+    role="img" aria-label="${esc(label)}">${arcs}${middle}</svg>`;
+}
+
+/** Legend rows beside a donut: colour, name, value, share. */
+function shares(slices, fmt) {
+  const total = slices.reduce((a, s) => a + Math.max(0, s.value), 0) || 1;
+  return [...slices].sort((a, b) => b.value - a.value).map((s) => `
+    <div class="sharerow">
+      <span class="dot" style="background:${s.colour}"></span>
+      <span class="sharename">${esc(s.name)}</span>
+      <span class="sharenum">${fmt(s.value)}</span>
+      <span class="sharepct">${Math.round(100 * Math.max(0, s.value) / total)}%</span>
+    </div>`).join("");
+}
+
+/**
+ * Grouped bars, one group per yield, one bar per civ.
+ *
+ * Grouped rather than a donut per yield, because the question is "who leads
+ * each of these", and four donuts side by side answers it four times without
+ * ever putting the civs next to each other. Each group scales to its own
+ * leader - gold and science are different units and a shared axis would make
+ * science invisible.
+ */
+function yieldBars(rows, metrics) {
+  return metrics.map(({ key, label, hint }) => {
+    const peak = Math.max(1, ...rows.map(({ e }) => Math.max(0, e[key] || 0)));
+    return `<div class="ygroup">
+      <div class="ylabel" title="${esc(hint)}">${label}</div>
+      <div class="ybars">${rows.map(({ c, e }) => {
+        const v = Math.max(0, e[key] || 0);
+        return `<span class="ybar" title="${esc(c.model || c.civ_name)}: ${v}">
+          <i style="height:${Math.round(100 * v / peak)}%;background:${CSS[c.colour]}"></i></span>`;
+      }).join("")}</div>
+    </div>`;
+  }).join("");
+}
+
+const SHORT_EFFORT = { minimal: "min", low: "low", medium: "med", high: "high" };
+
 function effortCell(s) {
   if (!s.effort) return `<td class="meta">—</td>`;
   // A change is marked, not merely implied by the value differing from a row you
@@ -766,7 +1233,7 @@ function effortCell(s) {
   const detail = s.effortSent && s.effortSent !== s.effort
     ? `${esc(s.effort)} — sent as ${esc(s.effortSent)}` : esc(s.effort);
   return `<td title="${moved ? `changed from ${esc(s.effortBefore)}. ` : ""}${detail}"
-    class="${moved ? "moved" : ""}">${esc(s.effort)}${
+    class="${moved ? "moved" : ""}">${esc(SHORT_EFFORT[s.effort] || s.effort)}${
     moved ? `<span class="arrow-up">▲</span>` : ""}</td>`;
 }
 
@@ -778,6 +1245,130 @@ function badge(id, value, hot = false) {
   el.className = hot ? "hot" : "";
 }
 
+/**
+ * Insights: the handful of things about this match that are worth saying out
+ * loud, stated as of the turn you are looking at.
+ *
+ * Every other panel answers "what is true right now". This one answers "what is
+ * strange about what has happened so far", which is a different job and the one
+ * the whole experiment exists for. The findings that survived the first
+ * complete match were all of this shape - not a number anybody asked for, but a
+ * ratio that turned out lopsided: six times more violence against wolves than
+ * against each other, seven private messages for every public one, fifty-two
+ * treaties that were all the same treaty.
+ *
+ * Two rules, both learned the hard way elsewhere in this project:
+ *
+ * A card only appears when the evidence for it exists. An insight computed from
+ * three data points is a coin toss wearing a headline, and the panel would be
+ * at its most confident on turn 2 when it knows almost nothing.
+ *
+ * A card states what happened, not what it means about a model. "They have not
+ * declared war" is an observation. "They are peaceful" is a claim about four
+ * language models that this bundle cannot support, and the difference matters
+ * more here than anywhere else in the viewer.
+ */
+function insights() {
+  const w = S.world;
+  if (!w) return `<div class="empty">Nothing to read yet.</div>`;
+  const cards = [];
+  const turn = S.turn;
+
+  // --- how long they went without declaring war ----------------------------
+  if (turn >= 10) {
+    const first = w.wars[0];
+    const quiet = first ? first.turn - 1 : turn;
+    const pct = Math.round(100 * quiet / turn);
+    cards.push(card(
+      first ? `turn ${first.turn}` : `${turn} turns`,
+      first ? "first declaration of war" : "and nobody has declared war",
+      first
+        ? `${quiet} turns passed before the first declaration - ${pct}% of the match
+           to this point. ${esc(first.text)}.`
+        : `Every civ can declare war on any turn at no cost, and none has.
+           Whether that is caution, an oversight, or a read of the odds is the
+           question; the fact is just that the option has gone unused.`,
+      first ? "" : "good"));
+  }
+
+  // --- who they actually fight ---------------------------------------------
+  const fights = w.rivalFights + w.wildFights;
+  if (fights >= 8) {
+    const ratio = w.rivalFights ? (w.wildFights / w.rivalFights) : Infinity;
+    cards.push(card(
+      w.rivalFights ? `${ratio.toFixed(1)}x` : `${w.wildFights}-0`,
+      "more fighting with the map than each other",
+      `${w.wildFights} fights involved wolves or barbarians, ${w.rivalFights}
+       were civ against civ. The wilderness is neutral and attacks everyone, so
+       it is the one opponent nobody has to choose - which makes the other
+       number the interesting one.`));
+  }
+
+  // --- public voice against private voice ----------------------------------
+  const talk = w.pub + w.priv;
+  if (talk >= 20) {
+    const ratio = w.pub ? (w.priv / w.pub) : Infinity;
+    cards.push(card(
+      w.pub ? `${ratio.toFixed(1)} : 1` : `${w.priv} : 0`,
+      "private messages for every public one",
+      `${w.priv} direct messages against ${w.pub} broadcasts. Both cost the same
+       and reach different audiences, so the split is a choice. Whether the two
+       voices say the same thing is answerable in the Diplomacy panel, one
+       thread at a time.`));
+  }
+
+  // --- what they ask each other for ----------------------------------------
+  const kinds = Object.entries(w.proposals).sort((a, b) => b[1] - a[1]);
+  const made = kinds.reduce((a, [, n]) => a + n, 0);
+  if (made >= 5) {
+    const [top, topN] = kinds[0];
+    const only = kinds.length === 1;
+    const rate = made ? Math.round(100 * w.signed / made) : 0;
+    cards.push(card(
+      only ? `${made} of ${made}` : `${topN} of ${made}`,
+      `proposals were ${esc(String(top).replace(/_/g, " "))}`,
+      only
+        ? `Five kinds of agreement are available - peace, ceasefire,
+           non-aggression, alliance, and trade in gold or technology - and only
+           this one has ever been proposed. ${rate}% were accepted.`
+        : `${kinds.map(([k, n]) => `${n} ${esc(String(k).replace(/_/g, " "))}`).join(", ")}.
+           ${rate}% of proposals were accepted.`,
+      only ? "warn" : ""));
+  }
+
+  // --- who is gone, and to what --------------------------------------------
+  for (const g of w.gone) {
+    const civ = civOf(g.who);
+    const row = S.signals?.[g.who] || {};
+    const toWild = (row.lostToWild || 0) + (row.sacked || 0);
+    const byRival = (row.fights || 0) - (row.wildFights || 0);
+    cards.push(card(
+      `turn ${g.turn}`,
+      `${esc(civ?.model || civ?.civ_name || g.who)} was eliminated`,
+      `It lost ${row.lostToWild || 0} units and ${row.sacked || 0} cities to the
+       wilderness, and fought ${byRival} times against a rival. When the first
+       number dwarfs the second, the map removed that civ rather than its
+       opponents did.`,
+      "bad"));
+  }
+
+  if (!cards.length) {
+    return `<div class="empty">Too early to say anything worth saying. Insights
+      appear once there is enough of a match to draw them from.</div>`;
+  }
+  return cards.join("") + `<div class="tick">Every figure is as of turn ${turn},
+    not the whole match - scrub back and a finding can disappear, which is the
+    honest behaviour for something calling itself an insight.</div>`;
+}
+
+/** One finding: a figure, what it counts, and the sentence that qualifies it. */
+function card(figure, label, body, tone = "") {
+  return `<div class="insight ${tone}">
+    <div class="ifig">${figure}</div>
+    <div class="ibody"><div class="ilabel">${label}</div>
+      <p>${body}</p></div></div>`;
+}
+
 function panels() {
   const f = S.frame, e = f.economy;
   const sign = (n) => (n ? `<span class="${n<0?"neg":"pos"}">${n>0?"+":""}${n}</span>` : "");
@@ -787,14 +1378,35 @@ function panels() {
     S.match.civs.map((c) => {
       const d = e[c.player_id] || {};
       const name = `<td class="name" title="${c.civ_name} · ${c.model || "?"}">
-        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
-          c.model || c.civ_name}</span></td>`;
+        <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span><span>${
+          esc(c.model || c.civ_name)}</span></span></td>`;
       if (!knows(c.player_id)) return `<tr class="fogged">${name}${hidden}</tr>`;
       return `<tr class="${d.alive?"":"dead"}">${name}
         <td>${d.gold??0} ${sign(d.gold_per_turn??0)}</td><td>${d.food_stored??0} ${sign(d.food_surplus??0)}</td>
         <td>${d.production_per_turn??0}</td><td>${d.science_per_turn??0}</td>
         <td>${d.cities??0}/${d.units??0}</td><td>${d.score??0}</td></tr>`;
-    }).join("")}</tbody></table>`;
+    }).join("")}</tbody></table>
+    ${(() => {
+      const rows = S.match.civs
+        .filter((c) => (S.frame.economy?.[c.player_id] || {}).alive !== false)
+        .map((c) => ({ c, e: S.frame.economy?.[c.player_id] || {} }));
+      if (!rows.length) return "";
+      const slices = rows.map(({ c, e }) => ({
+        name: c.model || c.civ_name, value: e.score || 0, colour: CSS[c.colour],
+      }));
+      return `<div class="chart">
+          ${donut(slices, { label: "share of score", centre: (t) => t.toLocaleString() })}
+          <div class="sharelist"><div class="charthead">share of score</div>
+            ${shares(slices, (v) => String(v))}</div></div>
+        <div class="charthead" style="margin-top:8px">output this turn</div>
+        <div class="ygrid">${yieldBars(rows, [
+          { key: "gold_per_turn", label: "gold", hint: "Net gold per turn after upkeep." },
+          { key: "food_surplus", label: "food", hint: "Food surplus per turn across all cities - what growth runs on." },
+          { key: "production_per_turn", label: "prod", hint: "Production per turn across all cities." },
+          { key: "science_per_turn", label: "sci", hint: "Science per turn - what the tech race runs on." },
+          { key: "culture_per_turn", label: "cult", hint: "Culture per turn, which feeds the score at the turn limit." },
+        ])}</div>`;
+    })()}`;
 
   // The cost meter. Deliberately *not* fog-limited: what a run cost is a fact
   // about the experiment rather than about the game, and hiding another
@@ -806,11 +1418,11 @@ function panels() {
     <table><thead><tr>
       <th title="Which model played this seat.">model</th>
       <th title="What this seat has cost so far, in US dollars, from the token counts the vendor actually reported - never an estimate. This is what the budget cap is measured against.">$</th>
-      <th title="Output tokens produced, including reasoning tokens where the vendor bills them as output. This is the expensive half: output runs about five times the price of input.">out tok</th>
+      <th title="Output tokens produced, including reasoning tokens where the vendor bills them as output. This is the expensive half: output runs about five times the price of input.">out</th>
       <th title="Share of input tokens served from cache at roughly a tenth the price. The system prompt is identical every turn, so a healthy number here is large. Zero is worth investigating on a vendor with an explicit cache breakpoint.">cache</th>
-      <th title="Median wall-clock seconds per turn. Turns resolve simultaneously, so the slowest seat sets the pace of the whole match.">s/turn</th>
+      <th title="Median wall-clock seconds per turn. Turns resolve simultaneously, so the slowest seat sets the pace of the whole match.">sec</th>
       <th title="How hard this seat was told to think on this turn. Shown every turn rather than only when it moves, so a steady seat reads as deliberate rather than as missing data. A green mark means it changed from the turn before. Hover the value for the vendor's own form of it - the four do not share an instrument, so 'medium' is an enum on some seats and a token budget on others.">effort</th>
-      <th title="Score gained per 100,000 tokens spent. The efficiency figure: it compares a cheap model playing adequately against an expensive one playing slightly better, and a leaderboard by this can invert a leaderboard by score.">per 100k</th>
+      <th title="Score gained per 100,000 tokens spent. The efficiency figure: it compares a cheap model playing adequately against an expensive one playing slightly better, and a leaderboard by this can invert a leaderboard by score.">/100k</th>
       </tr></thead><tbody>${
       totals.map(({ c, s }) => {
         const tokens = s.input + s.output + s.cached;
@@ -825,10 +1437,10 @@ function panels() {
         // prefix from cache reported 13% purely because it thought at length.
         const inTokens = s.input + s.cached;
         const cachePct = inTokens ? Math.round(100 * s.cached / inTokens) : 0;
-        return `<tr><td class="name" title="${c.civ_name}">
-          <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span>${
-            c.model || c.civ_name}</span></td>
-          <td>${s.usd.toFixed(3)}</td><td>${(s.output/1000).toFixed(1)}k</td>
+        return `<tr><td class="name" title="${esc(c.model || "")} playing ${c.civ_name}">
+          <span class="civ"><span class="dot" style="background:${CSS[c.colour]}"></span><span>${
+            esc(c.model || c.civ_name)}</span></span></td>
+          <td>${s.usd.toFixed(3)}</td><td>${s.output >= 1e6 ? (s.output/1e6).toFixed(2) + "M" : (s.output/1000).toFixed(1) + "k"}</td>
           <td class="${cachePct ? "" : "warn"}" title="${cachePct ? "" :
             "no cache reads. Worth chasing on a vendor with an explicit breakpoint - " +
             "a prefix written and never read costs 12.5x. On Gemini it is expected: " +
@@ -839,6 +1451,16 @@ function panels() {
           ${effortCell(s)}
           <td>${per.toFixed(0)}</td></tr>`;
       }).join("")}</tbody></table>
+    ${(() => {
+      const slices = totals.map(({ c, s }) => ({
+        name: c.model || c.civ_name, value: s.usd, colour: CSS[c.colour],
+      }));
+      return `<div class="chart">
+        ${donut(slices, { label: "share of spend", centre: (t) => "$" + t.toFixed(2) })}
+        <div class="sharelist"><div class="charthead">share of spend</div>
+          ${shares(slices, (v) => "$" + v.toFixed(3))}</div></div>`;
+    })()}
+    ${effortVariation(totals)}
     <div class="tick" style="margin-top:6px">$${grand.toFixed(3)} through turn ${S.turn}
       · ${(grand / S.turn * S.match.turn_limit).toFixed(2)} projected at the cap</div>`;
 
@@ -856,11 +1478,11 @@ function panels() {
     // and the event ticker off the screen entirely.
     const open = S.expanded === c.player_id || thinkers.length === 1;
     const detail = open ? `
-      ${d.assessment ? `<p><b>Situation.</b> ${esc(d.assessment)}</p>` : ""}
-      ${(d.threats||[]).length ? `<p><b>Threats.</b> ${esc((d.threats||[]).join(" · "))}</p>` : ""}
-      <p class="plan"><b>Plan.</b> ${esc(d.plan||"—")}</p>
+      ${d.assessment ? `<p><b>Situation.</b> ${linkRefs(esc(d.assessment))}</p>` : ""}
+      ${(d.threats||[]).length ? `<p><b>Threats.</b> ${linkRefs(esc((d.threats||[]).join(" · ")))}</p>` : ""}
+      <p class="plan"><b>Plan.</b> ${linkRefs(esc(d.plan||"—"))}</p>
       ${d.confidence != null ? `<p class="meta">confidence ${d.confidence}</p>` : ""}` : `
-      <p class="plan clamp">${esc(d.plan||"—")}</p>`;
+      <p class="plan clamp">${linkRefs(esc(d.plan||"—"))}</p>`;
     return `<div class="card ${open?"open":""}" data-civ="${c.player_id}">
       <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${c.model || c.civ_name}
         <span class="meta">${
@@ -920,6 +1542,9 @@ function panels() {
       || m.from === S.focus || m.to === S.focus
   ).length;
   badge("economy", S.match.civs.length);
+  const found = insights();
+  $("insights").innerHTML = found;
+  badge("insights", (found.match(/class="insight /g) || []).length);
   badge("cost", Object.keys(S.spend || {}).length);
   badge("reasoning", thinkers.length);
   badge("dossier", dossierCount.label, dossierCount.hot);
@@ -985,7 +1610,9 @@ function drawDossier(f) {
   // chooses to write to itself and is handed back verbatim next turn. The
   // turn-by-turn thinking is the Reasoning panel, for all four civs at once.
   const note = `<p class="meta">What this agent chose to remember. Its
-    turn-by-turn thinking is in Reasoning.</p>`;
+    turn-by-turn thinking is in Reasoning. <b>trusts:</b> how far it believes
+    that rival&#39;s word - its own judgement, revised as promises are kept or
+    broken. Not a threat rating.</p>`;
   // "All" shows every civ's memory side by side, including the ones that have
   // written nothing - an empty dossier is itself a finding, and two of four
   // models in the first match kept no opponent models at all. Scrubbing with
@@ -1012,7 +1639,8 @@ function drawDossier(f) {
         ${!d ? `<p class="empty">Nothing written yet.</p>` : open ? `
         <p><b>Doctrine.</b> ${esc(d.doctrine || "—")}</p>
         ${(d.opponent_models || []).map((m) => `<p><b>${esc(nameOf(m.player_id))}</b>
-          <span class="trust ${m.trustworthiness}">${m.trustworthiness}</span><br>
+          <span class="trust ${m.trustworthiness}" title="How far this civ trusts that rival&#39;s word, in its own judgement - not a threat rating and not a measure of strength. It is the one field the dossier asks a model to revise when evidence arrives, so a promise kept or broken is exactly what should move it."
+            >trusts: ${m.trustworthiness}</span><br>
           ${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`).join("")
           || `<p class="meta">no opponent models</p>`}
         ${(d.standing_commitments || []).length ? `<p><b>Commitments.</b></p>
@@ -1023,7 +1651,7 @@ function drawDossier(f) {
         <p class="meta">${(d.opponent_models || []).length
             ? (d.opponent_models || []).map((m) =>
                 `${esc(nameOf(m.player_id))} <span class="trust ${m.trustworthiness}"
-                  >${m.trustworthiness}</span>`).join(" · ")
+                  title="How far this civ trusts that rival&#39;s word, in its own judgement - not a threat rating and not a measure of strength. It is the one field the dossier asks a model to revise when evidence arrives, so a promise kept or broken is exactly what should move it.">trusts: ${m.trustworthiness}</span>`).join(" · ")
             : "no opponent models"} ·
           ${(d.standing_commitments || []).length} commitments ·
           ${(d.lessons || []).length} lessons</p>`}</div>`;
@@ -1048,7 +1676,8 @@ function drawDossier(f) {
       const prior = S.priorTrust?.[who]?.[m.player_id];
       const turned = prior && prior !== m.trustworthiness;
       return `<p class="${old ? "" : "fresh"}"><b>${nameOf(m.player_id)}</b>
-        <span class="trust ${m.trustworthiness} ${turned ? "fresh" : ""}">${m.trustworthiness}</span>
+        <span class="trust ${m.trustworthiness} ${turned ? "fresh" : ""}"
+          title="How far this civ trusts that rival&#39;s word, in its own judgement - not a threat rating and not a measure of strength. It is the one field the dossier asks a model to revise when evidence arrives, so a promise kept or broken is exactly what should move it.">trusts: ${m.trustworthiness}</span>
         ${turned ? `<span class="edited">was ${prior}</span>` : ""}
         <br>${esc(m.assessed_intent || "")}${m.notes ? ` · ${esc(m.notes)}` : ""}</p>`;
     }).join("")}
@@ -1091,11 +1720,32 @@ function drawSignals() {
     const units = e.units || 0;
     const military = e.military || 0;
     const hurt = g.lostToWild + g.sacked;
+    // Every tag carries a title now. They read "met 3" and "12 sent" before,
+    // which is a number and a word and no way to tell what either counted.
     const tags = [
-      g.met.size ? `<span class="tag">met ${g.met.size}</span>` : "",
-      g.said ? `<span class="tag">${g.said} sent</span>` : "",
-      hurt ? `<span class="tag bad" title="${g.lostToWild} units lost, ${g.sacked} cities sacked"
-        >${hurt} to the wild</span>` : "",
+      g.met.size
+        ? `<span class="tag" title="Rivals this civ has made contact with - seen a
+            unit or city of theirs at least once. Contact is what unlocks
+            diplomacy with them.">met ${g.met.size}</span>`
+        : "",
+      g.said
+        ? `<span class="tag" title="Messages, proposals and replies sent so far,
+            public and private together.">${g.said} sent</span>`
+        : "",
+      g.lessons
+        ? `<span class="tag" title="Lessons this civ keeps in its dossier - what it
+            decided was worth remembering about how this world works. It writes
+            them itself and reads them back every turn.">${g.lessons} lessons</span>`
+        : "",
+      g.rivalsModelled
+        ? `<span class="tag" title="Rivals it has written an opinion about, with an
+            assessed intent and a trust rating.">${g.rivalsModelled} judged</span>`
+        : "",
+      hurt
+        ? `<span class="tag bad" title="${g.lostToWild} units lost and ${g.sacked}
+            cities sacked by wolves and barbarians - the wilderness, not a
+            rival.">${hurt} to wild</span>`
+        : "",
     ].join("");
     return `<div class="sigrow">
       <div class="who"><span class="dot" style="background:${CSS[c.colour]}"></span>${
@@ -1118,13 +1768,16 @@ function drawSignals() {
         [g.dm / talk, "dm", `${g.dm} private`],
       ])}<span class="n">${g.said || "0"}</span></div>
     </div>`;
-  }).join("") + `<div class="tick" style="margin-top:8px">economy is
+  }).join("") + scienceRace(rows) + warFronts(rows) + `<div class="tick" style="margin-top:8px">economy is
     <b class="k food">food</b> / <b class="k gold">gold</b> / <b class="k sci">science</b> /
     <b class="k prod">production</b>, named in the order they are drawn -
     each scaled against the strongest civ · army is the
     <b class="k mil">military</b> share of units · talk is
     <b class="k pub">public</b> / <b class="k dm">private</b> · the wild is
-    barbarians and wolves</div>`;
+    barbarians and wolves<br><b>met</b> rivals contacted ·
+    <b>sent</b> messages and proposals · <b>lessons</b> and <b>judged</b> are
+    what it keeps in its dossier · <b>to wild</b> is losses to wolves and
+    raiders rather than to a rival</div>`;
 
   const pressure = rows.reduce((a, { g }) => a + g.lostToWild + g.sacked, 0);
   badge("signals", pressure || S.match.civs.length, pressure > 0);
@@ -1248,11 +1901,11 @@ async function drawDiplomacy(relationLines) {
         // rendering failure rather than as a choice. A model signing a pact
         // without comment is a real and slightly cold thing to have done, and
         // the panel should say so rather than leave a gap.
-        m.text ? esc(m.text)
+        m.text ? linkRefs(esc(m.text))
                : `<span class="wordless">${m.kind === "reply"
                     ? `signed without comment` : `sent with no note attached`}</span>`}
       ${m.turn === S.turn && f_reasoning(m.from) ? `<div class="aside">
-        <b>its plan that turn:</b> ${esc(f_reasoning(m.from))}</div>` : ""}</div>`;
+        <b>its plan that turn:</b> ${linkRefs(esc(f_reasoning(m.from)))}</div>` : ""}</div>`;
   }).join("") : `<div class="empty">Nothing said in this thread yet.</div>`;
 
   $("messages").innerHTML = `<div class="threads">${tabs}</div>${body}` +
@@ -1265,6 +1918,49 @@ async function drawDiplomacy(relationLines) {
     // transcript into a way of navigating the match.
     if (msg && +msg.dataset.turn !== S.turn) show(+msg.dataset.turn);
   };
+}
+
+/**
+ * Turn coordinates and unit ids in a model's prose into things you can point at.
+ *
+ * Agents write "Move settler u64 to (-8,0) en route to site (-9,-1)". Every one
+ * of those references is exact and, on a 1027-tile board, unfindable by eye -
+ * so the reasoning panel described a board the reader could not locate.
+ *
+ * Applied *after* escaping, never before: the input is model output and goes
+ * into `innerHTML`. `esc` runs first, this only ever inserts spans around text
+ * that is already inert, and the pattern matches digits and commas rather than
+ * anything that could carry markup.
+ *
+ * A unit resolves to the tile it currently stands on. Highlighting the mesh
+ * itself would be better and is much more work - instanced meshes share one
+ * material - and the tile is enough to answer "where is it".
+ */
+// One pass, one alternation. Two sequential `replace` calls would rescan the
+// markup the first one inserted, and a coordinate pattern hiding inside an
+// attribute is the kind of bug that only shows up on one sentence in a hundred.
+//
+// No `\b` before the number: a word boundary does not exist between a space and
+// a minus, so `-13,6` matched as `13,6`, resolved to a different tile or none,
+// and the pill silently vanished from every negative coordinate - which on this
+// map is most of them.
+const REF_RE = /\bu(\d{1,4})\b|\(?(-?\d{1,2}),\s?(-?\d{1,2})\)?/g;
+
+function linkRefs(escaped) {
+  if (!escaped) return escaped;
+  return escaped.replace(REF_RE, (whole, unitId, q, r) => {
+    if (unitId !== undefined) {
+      const unit = (S.frame?.units || []).find((u) => u.id === `u${unitId}`);
+      // A dead unit still gets a pill, marked. The sentence referred to
+      // something real when it was written, and "this no longer exists" is
+      // itself worth seeing when reading back an old turn.
+      return unit
+        ? `<span class="ref unit" data-tile="${unit.at}">${whole}</span>`
+        : `<span class="ref gone" title="no longer on the board">${whole}</span>`;
+    }
+    const index = tileAt(`${q},${r}`);
+    return index == null ? whole : `<span class="ref" data-tile="${index}">${whole}</span>`;
+  });
 }
 
 /** The sender's own private plan on a given turn, if this frame carries it. */
@@ -1555,6 +2251,9 @@ function tooltips(root) {
   }
   S.match = await res.json();
 
+  // Key -> index, so a coordinate written in prose can be found in O(1).
+  S.tileIndex = new Map(S.match.tiles.map((key, i) => [key, i]));
+
   staticLayer.add(buildTerrain(S.match.tiles, S.match.terrain));
   staticLayer.add(buildScatter(S.match.tiles, S.match.terrain));
   staticLayer.add(buildResources(S.match.tiles, S.match.terrain, S.match.resources));
@@ -1646,6 +2345,17 @@ function tooltips(root) {
     panels();
   };
   tooltips(document.querySelector("aside"));
+  // Delegated, so it covers every panel that renders model prose and keeps
+  // working as those panels are re-rendered each turn.
+  const aside = document.querySelector("aside");
+  aside.addEventListener("mouseover", (ev) => {
+    const ref = ev.target.closest(".ref[data-tile]");
+    if (ref) pointAt(+ref.dataset.tile);
+  });
+  aside.addEventListener("mouseout", (ev) => {
+    if (ev.target.closest(".ref[data-tile]")) clearPointer();
+  });
+  aside.addEventListener("scroll", clearPointer, true);
   wireLibrary();
   $("slider").max = S.match.turns;
   $("slider").oninput = (e) => show(+e.target.value);
