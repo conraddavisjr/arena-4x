@@ -1585,9 +1585,8 @@ function banner(partners, colourOf) {
  * banner uses one: the camera orbits, and a flat plane is edge-on and
  * unreadable for half of every turn.
  */
-export function buildNameplates(cities, nameOf, locate, colourOf) {
+export function buildNameplates(cities, units, nameOf, locate, colourOf) {
   const group = new THREE.Group();
-  if (!cities.length) return group;
 
   // One seat per empire: most populous, and on a tie the earliest tile index,
   // so the plate does not hop between two equal cities as the turns advance.
@@ -1599,8 +1598,26 @@ export function buildNameplates(cities, nameOf, locate, colourOf) {
     if (better) seat.set(city.owner, city);
   }
 
-  for (const [who, city] of seat) {
-    const [x, y, z] = locate(city.at);
+  // An empire that holds no city still needs naming, and keying only on cities
+  // meant it went unnamed for exactly the stretches where the question is
+  // loudest. In the first complete match one civ wandered nineteen turns before
+  // it founded anything - the whole opening, with five units on the board and
+  // nothing on the map saying whose they were - and then lost its only city and
+  // went unnamed again on its way out. So a civ with no city is planted among
+  // its units instead.
+  const camp = new Map();
+  for (const u of units || []) {
+    if (seat.has(u.owner)) continue;
+    if (!camp.has(u.owner)) camp.set(u.owner, []);
+    camp.get(u.owner).push(u.at);
+  }
+
+  const spots = [...seat].map(([who, city]) => [who, city.at]);
+  for (const [who, tiles] of camp) spots.push([who, medoid(tiles, locate)]);
+  if (!spots.length) return group;
+
+  for (const [who, tile] of spots) {
+    const [x, y, z] = locate(tile);
     const face = nameplate(nameOf(who), colourOf(who));
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map: face,
@@ -1628,6 +1645,27 @@ export function buildNameplates(cities, nameOf, locate, colourOf) {
     group.add(sprite);
   }
   return group;
+}
+
+/**
+ * The tile nearest the centre of a scattered group.
+ *
+ * The mean is not usable: a civ with units on two sides of a mountain has a
+ * mean somewhere inside the mountain, and a label planted there belongs to
+ * neither half. The medoid is always one of the actual positions.
+ */
+function medoid(tiles, locate) {
+  if (tiles.length === 1) return tiles[0];
+  const at = tiles.map((t) => [t, locate(t)]);
+  const cx = at.reduce((a, [, p]) => a + p[0], 0) / at.length;
+  const cz = at.reduce((a, [, p]) => a + p[2], 0) / at.length;
+  let best = tiles[0];
+  let bestD = Infinity;
+  for (const [t, p] of at) {
+    const d = (p[0] - cx) ** 2 + (p[2] - cz) ** 2;
+    if (d < bestD) { bestD = d; best = t; }
+  }
+  return best;
 }
 
 const plates = new Map();

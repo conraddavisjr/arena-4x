@@ -819,12 +819,32 @@ function applyFog(lit, explored) {
   for (const layer of staticLayer.children) layer.userData.paint?.(shade);
 }
 
+/**
+ * Renders in flight. A scrub can start a draw while the previous one is still
+ * folding, and the fold is the slow part - on a long match it is hundreds of
+ * frames of I/O.
+ *
+ * Without this, the older draw resumes after the newer one has already cleared
+ * the layer and adds its stale geometry on top: two boards at once, one of them
+ * several turns out of date. It hid for a long time because the duplicates
+ * coincide wherever nothing moved - a city on the same tile in both turns draws
+ * twice in exactly the same place and looks like one city. It only became
+ * visible when a label was planted on a wandering army, which moves every turn,
+ * and the board showed two of the same empire in two places.
+ */
+let drawing = 0;
+
 async function drawTurn() {
   const f = S.frame;
+  const mine = ++drawing;
   clear(dynamicLayer);
 
   const lit = S.mode === "agent" && S.focus ? new Set(f.visibility[S.focus] || []) : null;
   const { owners, explored, dossiers, before, priorTrust, spend, signals, world } = await foldTo(S.turn);
+  // A newer draw started while this one was folding. It has already cleared the
+  // layer and will draw the turn the user is actually on, so everything below
+  // would be stale geometry added behind its back.
+  if (mine !== drawing) return;
   S.spend = spend;
   S.signals = signals;
   S.world = world;
@@ -853,16 +873,27 @@ async function drawTurn() {
   // Towns: plaza, buildings, a curtain wall if built, a keep for a temple or
   // wonder. Walls take their own baked colours; only the roofs carry the civ.
   const cities = f.cities.filter((c) => !lit || lit.has(c.at));
+  const visible = f.units.filter((u) => !lit || lit.has(u.at));
   dynamicLayer.add(buildSettlements(cities, (tile) => {
     const [x, , z] = at(tile);
     return [x, topOf(tile), z];
   }, hexOf));
 
   // Who each colour *is*, said on the board rather than only in the panels.
-  // Fog applies for free: `cities` is already filtered to what this seat can
-  // see, so in agent mode a rival's nameplate appears when you find their town
-  // and not before - which is the same rule the borders and units follow.
-  dynamicLayer.add(buildNameplates(cities, nameOf, (tile) => {
+  // Over the empire's largest city, or among its units when it holds no city -
+  // which is every civ for the first turns of a match, and a civ on its way out
+  // at the end of one.
+  //
+  // Fog applies for free: both lists are already filtered to what this seat can
+  // see, so in agent mode a rival's nameplate appears when you find them and
+  // not before - the same rule the borders and units follow.
+  // Civ units only. The wilderness is modelled as a player so that combat and
+  // movement work unchanged, which means it owns units, which meant it got a
+  // nameplate reading "Wilderness" planted on whichever wolf pack happened to
+  // be central. Every place that means "a rival civilisation" has to ask for
+  // civs specifically - the same trap the engine's own tests are mostly about.
+  const civUnits = visible.filter((u) => civOf(u.owner));
+  dynamicLayer.add(buildNameplates(cities, civUnits, nameOf, (tile) => {
     const [x, , z] = at(tile);
     return [x, topOf(tile), z];
   }, hexOf));
@@ -893,7 +924,6 @@ async function drawTurn() {
   }, hexOf));
 
   // Units, one instanced mesh per type plus a shared ownership ring.
-  const visible = f.units.filter((u) => !lit || lit.has(u.at));
   const bases = instanced(baseGeometry(), visible.length, { transparent: true, opacity: 0.9 });
   visible.forEach((u, n) => {
     const [x, , z] = at(u.at);

@@ -554,9 +554,32 @@ not prompt anyone to look.
   sentence on hover, rather than the data.
   Worth stating because the reflex is to shorten the identifier, which is the
   one thing on the row that cannot be recovered from context.
+- **Two boards at once, and only a moving label revealed it.** `drawTurn`
+  cleared the scene, then awaited the fold, then drew. A scrub during the fold
+  started a second draw that cleared and drew correctly - and then the first one
+  resumed and added its stale geometry behind it.
+  The duplicates coincide wherever nothing moved, so a city on the same tile in
+  both turns drew twice in the same place and looked like one city.
+  It survived every previous panel because everything drawn was either static
+  or overlapping. It became visible the moment a nameplate was planted on a
+  wandering army, which is somewhere different every turn: the board showed the
+  same empire twice, in two places, one of them several turns out of date.
+  Fixed with a sequence number checked after the await. The lesson is about
+  where to look rather than about renderers - the bug was years-old in project
+  time and was found by adding a feature that happened to move.
+- **The wilderness got a nameplate.** It is modelled as a player so combat and
+  movement work unchanged, so it owns units, so a label keyed on unit ownership
+  named it. The engine's own test file opens by warning about exactly this and
+  the viewer made the mistake anyway, which says the warning needs to be a
+  helper rather than a paragraph.
 
-The rule the first two suggest: a `return` is only trustworthy in a function
-that does one thing. Both blocks are their own functions now.
+The first two suggest a rule: a `return` is only trustworthy in a function that
+does one thing. Both blocks are their own functions now.
+
+The last two suggest another, and it is the more useful one. Three of the five
+were invisible until something *moved* - a label on a wandering army, a name on
+a roaming wolf pack, a column that had to hold a real string. A viewer tested
+only against a settled board tests almost nothing.
 
 ---
 
