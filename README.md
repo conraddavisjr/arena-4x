@@ -1,4 +1,4 @@
-# AI ARENA
+# ARENA-4X
 
 **Four frontier models share one map and play a 4X strategy game against each other.
 Every prompt, reasoning trace, order and state change is recorded, and the whole match replays byte-identically from the log.**
