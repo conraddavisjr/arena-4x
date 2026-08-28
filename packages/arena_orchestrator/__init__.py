@@ -7,6 +7,7 @@ Layers, outermost first:
     journal      the append-only log a crashed match is rebuilt from
     budget       the out-of-fiction dollar halt and the in-fiction allowance
     pricing      the rate card behind both
+    profiles     how many tokens a seat spends, so a run can be costed first
     resilience   rate limiting, retry, circuit breaking
     providers/   one narrow seam over four unrelated vendor APIs
 
@@ -30,10 +31,12 @@ from .config import RunConfig, Seat
 from .journal import Journal, Recovered, recover
 from .loop import MatchResult, Orchestrator
 from .pricing import RATES, UnknownModel, cost_of, rate_for
+from .profiles import PROFILES, Profile, Projection, profile_for, project
 from .providers import PROVIDERS, LLMClient, ProviderError, Turn, Usage, build
 from .resilience import CircuitBreaker, RetryPolicy, TokenBucket, with_retry
 
 __all__ = [
+    "PROFILES",
     "PROVIDERS",
     "RATES",
     "Agent",
@@ -45,6 +48,8 @@ __all__ = [
     "MatchResult",
     "Orchestrator",
     "Outcome",
+    "Profile",
+    "Projection",
     "ProviderError",
     "Recovered",
     "RetryPolicy",
@@ -56,6 +61,8 @@ __all__ = [
     "Usage",
     "build",
     "cost_of",
+    "profile_for",
+    "project",
     "rate_for",
     "recover",
     "with_retry",

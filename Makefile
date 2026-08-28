@@ -10,7 +10,7 @@ PYTEST  := $(VENV)/bin/pytest
 RUFF    := $(VENV)/bin/ruff
 
 .DEFAULT_GOAL := help
-.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export library prices preflight
+.PHONY: help setup setup-engine env test test-engine contracts lint fmt clean bots map run view view3d stage3d port-free export library prices preflight profiles
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -63,7 +63,12 @@ run:  ## Play a match through the orchestrator. make run ROSTER=dry SEED=4
 		$(if $(TURNS),--turns $(TURNS),)
 
 preflight:  ## Check every seat can actually spend. make preflight ROSTER=shakeout TURNS=300
-	$(PY) scripts/preflight.py --roster $(or $(ROSTER),shakeout) --turns $(or $(TURNS),300)
+	$(PY) scripts/preflight.py --roster $(or $(ROSTER),shakeout) --turns $(or $(TURNS),300) $(if $(BUDGET),--budget $(BUDGET),)
+
+profiles:  ## Re-derive the token profiles behind the projection, from the journals
+	@echo "Read the R^2 before pasting. A low one means the seat did not play a"
+	@echo "long enough match to have a growth rate, not that the fit is noisy."
+	$(PY) scripts/derive_profiles.py output/*/journal.jsonl --compare
 
 prices:  ## Print the rate card with its provenance, for re-checking against vendors
 	@$(PY) -c "import sys; sys.path.insert(0,'packages'); \

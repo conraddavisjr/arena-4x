@@ -126,12 +126,18 @@ def main() -> None:
             )
         writer.add(state, events, spend_by_turn.get(record["turn"], {}))
 
-    ended = next(
-        (r for r in jl.Journal(root=args.run).records() if r["type"] == jl.MATCH_ENDED), None
-    )
-    created = next(
-        (r for r in jl.Journal(root=args.run).records() if r["type"] == jl.MATCH_CREATED), None
-    )
+    # First `match_created`, *last* `match_ended`. A match that halted on a
+    # billing problem, was topped up and resumed carries two end records, and
+    # the one that says how it ended is the later one - taking the first would
+    # publish a finished match as having stopped for a problem it recovered
+    # from. One pass, because two `next()` calls over the same file read it
+    # twice to answer half a question each.
+    created = ended = None
+    for record in jl.Journal(root=args.run).records():
+        if record["type"] == jl.MATCH_CREATED and created is None:
+            created = record
+        elif record["type"] == jl.MATCH_ENDED:
+            ended = record
     root = writer.finish(
         state,
         {
