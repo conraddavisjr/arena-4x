@@ -48,6 +48,25 @@ CACHE_MISS = "cache_miss"
 BUDGET_UPDATED = "budget_updated"
 MATCH_ENDED = "match_ended"
 
+# `match_ended` covers two things that are not the same, and treating them alike
+# turned a recoverable billing problem into a lost run.
+#
+# A match that *finished* has a game outcome: someone won, or the turn limit
+# arrived. There is nothing to resume, and asking to resume one is an operator
+# error worth refusing.
+#
+# A match that *halted* stopped for a reason outside the game - an account that
+# could not pay, or the dollar cap. The board is coherent and scoreable, which
+# is why the halt exists, but the match is not over: the condition that stopped
+# it is one a human fixes with a billing page or a flag. Sealing those as ended
+# meant a seat running dry on turn 240 cost the whole run, which is the exact
+# outcome the halt was added to prevent - it stopped the match limping, and then
+# stopped it continuing.
+#
+# Resume is still explicit and still human-initiated. What changes is that the
+# journal no longer says a stopped match is a finished one.
+HALTS = frozenset({"provider_credits", "budget_cap"})
+
 
 @dataclass
 class Journal:
@@ -155,18 +174,43 @@ class Recovered:
     # rebuild or resume that guesses it produces a different match.
     match_config: dict[str, Any] | None
     turns: list[dict[str, Any]]
+    # A game outcome was recorded: won, or the turn limit. Not resumable.
     ended: bool
+    # The match stopped for an operational reason, named here. Resumable once
+    # the reason is dealt with - credits topped up, or the cap raised.
+    halted: str | None
     # What the interrupted run had already spent. Carried forward because the
     # budget cap is a cap on the *match*, not on the current process: a ledger
     # that restarts at zero lets a match that crashes near its limit resume and
     # spend the whole cap again, and a match that crashes repeatedly has no
     # limit at all.
     spent_usd: float = 0.0
+    # Per seat, and not merely the total split for display. Resume seeded the
+    # per-agent dollars at zero while carrying the total, so a resumed match
+    # reported a spend column that did not add up to its own total - and
+    # `score_per_100k`, the efficiency figure the whole experiment reports,
+    # divided a full match's score by half a match's spend.
+    spent_by_agent: dict[str, float] = field(default_factory=dict)
     usage_by_agent: dict[str, dict[str, int]] = field(default_factory=dict)
+    # Per-turn, per-seat spend, in the shape the bundle writer wants. Replaying
+    # a match rebuilds its frames, and frames carry what each seat spent that
+    # turn - so without this a resumed run's cost panel reads $0.00 for every
+    # turn before the interruption. The tokens were never lost, only unread.
+    spend_by_turn: dict[int, dict[str, dict[str, Any]]] = field(default_factory=dict)
 
     @property
     def last_turn(self) -> int:
         return self.turns[-1]["turn"] if self.turns else 0
+
+    @property
+    def resumable(self) -> bool:
+        """Is there a match here to carry on with?
+
+        A halted match is; a finished one is not; and a journal that stops
+        mid-turn - a killed process - has neither record and is the ordinary
+        crash-resume case that always worked.
+        """
+        return bool(self.turns) and not self.ended
 
 
 def recover(root: Path) -> Recovered:
@@ -183,15 +227,35 @@ def recover(root: Path) -> Recovered:
     match_id: str | None = None
     match_config: dict[str, Any] | None = None
     turns: list[dict[str, Any]] = []
-    ended = False
+    outcome: str | None = None
     spent = 0.0
+    by_agent: dict[str, float] = {}
     usage: dict[str, dict[str, int]] = {}
+    spend_by_turn: dict[int, dict[str, dict[str, Any]]] = {}
     for record in journal.records():
         if record["type"] == AGENT_CALL:
             spent += record.get("cost_usd", 0.0)
+            by_agent[record["player_id"]] = round(
+                by_agent.get(record["player_id"], 0.0) + record.get("cost_usd", 0.0), 6
+            )
             seat = usage.setdefault(record["player_id"], {})
             for field_name in ("input_tokens", "output_tokens", "cache_read_tokens"):
                 seat[field_name] = seat.get(field_name, 0) + record.get(field_name, 0)
+            row = spend_by_turn.setdefault(record["turn"], {}).setdefault(
+                record["player_id"],
+                {"usd": 0.0, "input": 0, "output": 0, "cached": 0, "ms": 0, "effort": None},
+            )
+            # As billed at the time. A rebuild reprices from tokens against the
+            # current rate card, which is the right thing for a published
+            # artifact; resume is continuing a run rather than restating it, and
+            # the ledger it is carrying forward is the one that was charged.
+            row["usd"] = round(row["usd"] + record.get("cost_usd", 0.0), 6)
+            row["input"] += record.get("input_tokens", 0)
+            row["output"] += record.get("output_tokens", 0)
+            row["cached"] += record.get("cache_read_tokens", 0)
+            row["ms"] += record.get("latency_ms", 0)
+            row["effort"] = record.get("effort")
+            row["effort_sent"] = record.get("effort_sent")
         if record["type"] == MATCH_CREATED:
             seed = record.get("seed")
             # Recovered rather than re-derived from the directory name. The
@@ -204,14 +268,21 @@ def recover(root: Path) -> Recovered:
         elif record["type"] == TURN_RESOLVED:
             turns.append(record)
         elif record["type"] == MATCH_ENDED:
-            ended = True
+            # Last one wins. A match that halted, was resumed and then finished
+            # carries two of these, and the one that describes how it ended is
+            # the later one - reading the first would report a resumed match as
+            # having stopped for a billing problem it recovered from.
+            outcome = record.get("reason")
     turns.sort(key=lambda r: r["turn"])
     return Recovered(
         seed=seed,
         match_id=match_id,
         match_config=match_config,
         turns=turns,
-        ended=ended,
+        ended=outcome is not None and outcome not in HALTS,
+        halted=outcome if outcome in HALTS else None,
         spent_usd=round(spent, 6),
+        spent_by_agent=by_agent,
         usage_by_agent=usage,
+        spend_by_turn=spend_by_turn,
     )

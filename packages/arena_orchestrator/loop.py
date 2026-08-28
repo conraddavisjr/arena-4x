@@ -210,7 +210,11 @@ class Orchestrator:
     async def run(self, *, resume: bool = False) -> MatchResult:
         recovered = jl.recover(self.root) if resume else None
         if recovered and recovered.ended:
-            raise RuntimeError(f"match at {self.root} already ended; nothing to resume")
+            raise RuntimeError(
+                f"match at {self.root} already ended; nothing to resume. A match "
+                f"that reached a game outcome is finished - resuming one would "
+                f"play turns past its own ending."
+            )
 
         journal = Journal.open(self.root, resume=bool(recovered))
         match_id = (recovered.match_id if recovered else None) or self.config.match_id
@@ -235,6 +239,11 @@ class Orchestrator:
             # this process. Starting at zero would let a run that crashed near
             # its limit spend the whole cap a second time.
             self.ledger.spent_usd = recovered.spent_usd
+            # Dollars per seat as well as the total. Seeding these at zero left
+            # the report's spend column summing to less than its own total, and
+            # `score_per_100k` dividing a whole match's score by the spend of
+            # however much of it happened after the last interruption.
+            self.ledger.by_agent.update(recovered.spent_by_agent)
             for player_id, counts in recovered.usage_by_agent.items():
                 self.ledger.by_agent.setdefault(player_id, 0.0)
                 self.ledger.usage_by_agent[player_id] = Usage(**counts)
@@ -500,7 +509,12 @@ class Orchestrator:
                     f"the log does not describe."
                 )
             if writer:
-                writer.add(state, events)
+                # With the spend the journal recorded, not without it. The
+                # frames a bundle is made of carry what each seat spent that
+                # turn, so replaying them empty left a resumed match reporting
+                # $0.00 for every turn before the interruption - the tokens were
+                # on disk the whole time and nothing was reading them.
+                writer.add(state, events, recovered.spend_by_turn.get(record["turn"], {}))
         return state, writer
 
     async def aclose(self) -> None:

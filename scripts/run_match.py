@@ -33,6 +33,7 @@ if _ENV.exists():
 
 from arena_engine import victory  # noqa: E402
 from arena_engine.types import MatchConfig  # noqa: E402
+from arena_orchestrator import journal as jl  # noqa: E402
 from arena_orchestrator.config import RunConfig, Seat  # noqa: E402
 from arena_orchestrator.dryrun import bot_seats  # noqa: E402
 from arena_orchestrator.loop import Orchestrator  # noqa: E402
@@ -124,6 +125,18 @@ def roster_for(name: str) -> list[tuple[str, str | None]]:
 
 ROSTERS = ("dry", "shakeout", "flagship")
 
+
+def default_budget() -> float:
+    """The safety halt, from .env or the built-in default.
+
+    A function rather than an inline `os.environ.get` because preflight needs the
+    same number: it now checks the projection against the cap, and a preflight
+    that cleared a $75 run the match then started at $100 would be reassuring
+    about something that was not going to happen.
+    """
+    return float(os.environ.get("MATCH_BUDGET_USD", 75))
+
+
 KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
@@ -175,9 +188,7 @@ async def main() -> None:
     parser.add_argument("--roster", choices=ROSTERS, default="dry")
     parser.add_argument("--seed", type=int, default=4)
     parser.add_argument("--turns", type=int, default=300)
-    parser.add_argument(
-        "--budget", type=float, default=float(os.environ.get("MATCH_BUDGET_USD", 75))
-    )
+    parser.add_argument("--budget", type=float, default=default_budget())
     parser.add_argument("--awareness", choices=["off", "tokens"], default="off")
     parser.add_argument(
         "--timeout",
@@ -211,7 +222,7 @@ async def main() -> None:
         if not args.no_preflight:
             import preflight
 
-            if await preflight.check(args.roster, args.turns):
+            if await preflight.check(args.roster, args.turns, budget_usd=args.budget):
                 raise SystemExit(
                     "preflight failed - fix the seats above, or pass --no-preflight "
                     "to start anyway."
@@ -247,6 +258,25 @@ async def main() -> None:
             f"  {seat.civ_name:<20} {points:>6} ${spent:>8.3f} {efficiency:>9.1f}  "
             f"{seat.model or seat.provider}"
         )
+    # A halt is not an ending, and the operator is the only one who can tell
+    # the difference between "this match is over" and "this match is waiting for
+    # a billing page". Printing the exact command is the whole affordance: the
+    # run that this protects is unattended, and whoever reads this scrollback
+    # hours later should not have to work out that resuming is even possible.
+    if result.reason in jl.HALTS:
+        fix = {
+            "provider_credits": "top up the account that ran dry",
+            "budget_cap": f"raise the cap above ${result.ledger.spent_usd:,.2f}",
+        }[result.reason]
+        print(f"\n  STOPPED, NOT FINISHED. {fix}, then carry on from turn {result.state.turn}:")
+        print(f"    make preflight ROSTER={args.roster} TURNS={args.turns}")
+        print(
+            f"    {sys.executable} scripts/run_match.py --roster {args.roster} "
+            f"--seed {args.seed} --turns {args.turns} --resume {root}"
+        )
+        print("  Spend so far is carried forward, so the cap still counts the")
+        print("  whole match rather than restarting at zero.")
+
     print(f"\nthen: make view3d MATCH={root}/bundle")
 
 

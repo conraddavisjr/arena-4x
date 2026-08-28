@@ -248,6 +248,58 @@ inputs) and wrong about its own vendor's model, quoting flash-lite at
 $0.54/$4.50 against a real $0.30/$2.50. Both of us were confidently wrong about
 something. The vendor pages settled it in four fetches.
 
+### The projection that clears a run for take-off was half of true
+
+The rate card's sibling, and the same bug one file over.
+`preflight.py` answers "can this account pay for a 300-turn match", and the
+answer it gave was **$21.88** against a measured **$46.80**.
+
+Its projection was five constants: 2k input, 4k output, 6.5k cached per turn,
+multiplied by the turn count.
+Both halves were wrong, in the same direction.
+
+**One output figure cannot cover four seats.**
+`gpt-5.4-mini` emits about 9,200 output tokens a call and `gemini-3.6-flash`
+about 1,270 - seven times apart.
+A single 4,000 charges the cheap seat too much and the expensive seat, which was
+**57% of the entire bill**, less than half of what it costs.
+
+**The prompt is a ramp, not a constant.**
+The observation carries the board, so it grows as the board fills.
+
+| seat | prompt, turn 1-20 | prompt, turn 121-128 | growth | R² |
+|---|---|---|---|---|
+| `gpt-5.4-mini` | 8k | 30k | 200/turn | 0.997 |
+| `gemini-3.6-flash` | 6k | 26k | 144/turn | 0.953 |
+| `grok-4.3` | 7k | 23k | 134/turn | 0.976 |
+
+Multiplying a flat profile by 300 bills the turn-one board three hundred times,
+and the error compounds exactly where the risk is: late in a long run, which is
+the only stretch a 128-turn match never reached.
+
+Measurements now live in `arena_orchestrator.profiles`, each carrying the match
+it came from, the calls behind it and the fit quality, re-derivable with
+`make profiles`.
+The projection prints a range rather than a number - `output_high` is the worst
+per-call mean any completed match has shown - because the question is not what a
+run will probably cost but whether the account survives it going badly.
+For this roster that range is **$46.80 to $62.14**, against a $75 halt.
+
+**The one that nearly got away.** `claude-haiku-4-5`'s growth fits at R² 0.53 in
+`baseline-300`, because it was eliminated on turn 35 holding one city and its
+observation never grew. Fitted anyway, it gives 61 tokens a turn against the
+142 the same seat shows across 51 turns of `shakeout-300` - a **40% under-projection**
+of that seat, produced by arithmetic that was entirely correct.
+A fit that low is not a noisy measurement, it is the absence of one, so
+`make profiles` flags it and the suite refuses any entry below R² 0.85.
+
+**What generalises.** The rate card was wrong about the price of a token; this
+was wrong about the number of tokens. Both were internally consistent, both
+produced plausible dollars, and neither could be caught by anything that did not
+compare the number against a journal from a match that actually happened. That
+comparison is now a test, skipped when no journal is present and binding when
+one is.
+
 ### A dead seat is not a slow seat, and the loop could not tell
 
 A 300-turn baseline reached turn 40, one seat's API credits ran out, and it
@@ -284,6 +336,82 @@ outage must not end a match, and an exhausted account must.
 *Aside:* the preflight's first version had no retry, so a single transient stall
 failed it on an account that was fine - the check was less resilient than the
 thing it checked. It uses the same retry ladder now.
+
+### The halt that saved the match made it unrecoverable
+
+The sequel to the entry above, and a better example of the pattern than either
+half is alone.
+Stopping on `OutOfCredits` was right.
+Recording that stop as `match_ended` was not, because that is the same record a
+match writes when somebody **wins**.
+
+`recover()` read `match_ended` and set `ended=True`; `run(resume=True)` saw
+`ended` and refused with *"match at ... already ended; nothing to resume"*.
+So topping up the account did nothing.
+A seat running dry on turn 240 of 300 meant re-running the whole match, and the
+safeguard added to stop a billing problem corrupting a run was now the reason a
+billing problem destroyed one.
+
+**Nothing was lost except the permission to continue.**
+The journal is flushed per record, so every resolved turn was on disk, complete,
+hash-verified and replayable.
+The data survived; the flag on top of it said the match was over.
+
+Reproduced end to end before it was fixed - halt on turn 5, top up, resume:
+
+```
+RUN 1 stopped: reason='provider_credits' at turn 5, spent $0.0467
+journal: 5 turns resolved, ended=True
+RESUME REFUSED: RuntimeError: ... already ended; nothing to resume
+```
+
+A process killed at the same point resumed perfectly, because a `kill -9` leaves
+no ending record at all.
+**The tidier failure was the unrecoverable one**, which is worth sitting with:
+the loop stopping cleanly and writing down why produced a worse outcome than the
+loop being shot in the head.
+
+`match_ended` now distinguishes an **outcome** - conquest, domination, science,
+turn limit, and final - from a **halt**: `provider_credits` or `budget_cap`,
+where the board is coherent and scoreable but the match is not over and the
+condition that stopped it is one a human clears with a billing page or a flag.
+`HALTS` names the second set, `Recovered.resumable` answers the question
+directly, and `run_match` prints the exact resume command when it halts, because
+the run this protects is unattended and whoever reads that scrollback hours later
+should not have to deduce that resuming is possible.
+
+Two things fell out of the fix that were wrong on their own:
+
+- **A resumed match reported $0.00 for every turn before the interruption.**
+  Bundle frames carry per-seat spend, and replay rebuilt them from recorded
+  decisions without the recorded costs. The tokens were in the journal the whole
+  time; nothing read them on that path. `rebuild_bundle` did read them, so the
+  data was always recoverable - the live artifact was just quietly wrong until
+  somebody rebuilt it, which is the worst version of a bug to ship.
+- **`rebuild_bundle` took the first `match_ended`, not the last.** A match that
+  halted, was topped up and then finished carries two, and reading the earlier
+  one publishes a completed run as having died of a billing problem it recovered
+  from. `next()` over a journal finds the earliest match, which is the right
+  answer for `match_created` and the wrong one here.
+
+- **The spend column did not add up to its own total.** Resume carried
+  `spent_usd` forward - so the cap, the safety-critical number, was right - and
+  seeded every *seat's* dollars at zero. A resumed match printed a per-seat table
+  summing to half the total above it, and `score_per_100k`, the efficiency figure
+  this experiment exists to produce, divided a whole match's score by the spend of
+  only the part played since the last interruption. Found by running the CLI and
+  reading the output, not by a test: the two numbers were on screen together and
+  disagreed, and nothing was comparing them.
+
+**What generalises.** Two records that look alike are not alike, and the cost of
+conflating them shows up only in the recovery path - the one place nobody
+exercises until the day it matters. The halt had tests, thorough ones, in both
+directions. Not one of them asked what happened *next*.
+
+And the three defects behind it were all the same defect: state that resume
+carried *partially*. The total but not the seats, the decisions but not their
+costs, the record but not its meaning. Half-restored state is worse than
+none, because the half that is present is what makes the result look plausible.
 
 ### Trading order enforcement for reasoning eliminated a civilisation
 
