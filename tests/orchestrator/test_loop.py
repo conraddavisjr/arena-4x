@@ -511,6 +511,185 @@ async def test_a_resumed_match_still_halts_on_the_budget_cap(tmp_path: Path) -> 
     assert resumed.reason == "budget_cap"
 
 
+def empties_after(orchestrator, player_id: str, calls: int):
+    """Wrap a seat so its account runs dry partway through the match.
+
+    A truncated journal is the wrong shape for this. `crash_after` models a
+    process killed between turns, which leaves no ending record at all; running
+    out of credits is the opposite case - the loop notices, stops deliberately,
+    and writes down why. The bug was in what that written-down reason meant.
+    """
+    from arena_orchestrator.providers.base import OutOfCredits
+
+    real = orchestrator.clients[player_id]
+
+    class Empty:
+        name, model = real.name, real.model
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete(self, system, user, schema):
+            self.calls += 1
+            if self.calls > calls:
+                raise OutOfCredits("You have no credits remaining.", provider=real.name)
+            return await real.complete(system, user, schema)
+
+        async def aclose(self):
+            return await real.aclose()
+
+    seat = Empty()
+    orchestrator.clients[player_id] = seat
+    orchestrator.agents[player_id].client = seat
+    return orchestrator
+
+
+async def test_an_account_running_dry_stops_the_match_without_sealing_it(
+    tmp_path: Path,
+) -> None:
+    """Topping up has to be enough to carry on. It was not.
+
+    The halt and the resume were each right on their own and wrong together. A
+    seat running out of credits stops the match - correctly, so it does not limp
+    on as a three-way comparison - and the stop was recorded as `match_ended`,
+    which is the same record a match writes when someone *wins*. Resume read
+    that record, concluded there was nothing to continue, and refused. So the
+    safeguard protecting a 300-turn run from a billing problem was also the
+    thing that made a billing problem cost the whole run.
+
+    Everything needed was already on disk: the journal is flushed per record, so
+    every resolved turn survived. Only the permission to continue was missing.
+    """
+    root = tmp_path / "run"
+    config = make_config(turns=12)
+    halted = await empties_after(make_orchestrator(root, config), "p2", calls=5).run()
+
+    assert halted.reason == "provider_credits"
+    assert halted.state.turn == 5
+
+    recovered = jl.recover(root)
+    assert recovered.halted == "provider_credits"
+    assert not recovered.ended, "a stopped match is not a finished one"
+    assert recovered.resumable
+
+    # The top-up: every seat can pay again.
+    resumed = await make_orchestrator(root, config).run(resume=True)
+    assert resumed.state.turn == 12
+    assert resumed.reason == "turn_limit"
+
+
+async def test_a_match_that_actually_finished_is_still_refused(tmp_path: Path) -> None:
+    """The distinction has to hold in both directions.
+
+    If every ending were resumable, resume would happily play turns past a
+    victory - which is a different match, quietly.
+    """
+    root = tmp_path / "run"
+    await make_orchestrator(root, make_config(turns=4)).run()
+
+    recovered = jl.recover(root)
+    assert recovered.ended and recovered.halted is None
+
+    with pytest.raises(RuntimeError, match="already ended"):
+        await make_orchestrator(root, make_config(turns=8)).run(resume=True)
+
+
+async def test_a_resumed_match_reports_how_it_ended_not_how_it_stopped(
+    tmp_path: Path,
+) -> None:
+    """Two `match_ended` records, and the later one is the answer.
+
+    A match that halted, was topped up and then finished carries both. Reading
+    the first would publish a completed run as having died on a billing problem
+    it recovered from - and the bundle rebuild did exactly that, because `next()`
+    over a journal finds the earliest match, not the last.
+    """
+    root = tmp_path / "run"
+    config = make_config(turns=12)
+    await empties_after(make_orchestrator(root, config), "p2", calls=5).run()
+    await make_orchestrator(root, config).run(resume=True)
+
+    assert len(records(root, jl.MATCH_ENDED)) == 2
+    recovered = jl.recover(root)
+    assert recovered.ended, "it finished this time"
+    assert recovered.halted is None, "the halt it recovered from is not its outcome"
+
+
+async def test_resume_carries_spend_per_seat_and_not_just_the_total(
+    tmp_path: Path,
+) -> None:
+    """The spend column has to add up to the total printed above it.
+
+    Resume carried `spent_usd` forward - the number the cap is enforced on, so
+    the safety property was right - and seeded every seat's dollars at zero. The
+    report then showed a per-seat column summing to half its own total, and
+    `score_per_100k`, the efficiency figure this experiment exists to produce,
+    divided a whole match's score by the spend of only the part played after the
+    last interruption.
+
+    Caught by running the CLI rather than the loop: the totals line and the
+    table disagreed on screen, which no assertion about the ledger was looking
+    at.
+    """
+    clean, halted = tmp_path / "clean", tmp_path / "halted"
+    config = make_config(turns=10)
+    reference = await make_orchestrator(clean, config).run()
+
+    await empties_after(make_orchestrator(halted, config), "p2", calls=4).run()
+    resumed = await make_orchestrator(halted, config).run(resume=True)
+
+    assert sum(resumed.ledger.by_agent.values()) == pytest.approx(
+        resumed.ledger.spent_usd, rel=0.01
+    ), "the per-seat column does not add up to the total"
+    for player_id, dollars in reference.ledger.by_agent.items():
+        assert resumed.ledger.by_agent[player_id] == pytest.approx(dollars, rel=0.01), (
+            f"{player_id} is missing what it spent before the interruption"
+        )
+
+
+async def test_a_replayed_turn_keeps_the_spend_it_was_billed(tmp_path: Path) -> None:
+    """A resumed match must not report $0.00 for the half it already paid for.
+
+    Bundle frames carry what each seat spent that turn, and replay rebuilt them
+    from recorded decisions without the recorded costs - so every turn before
+    the interruption rendered as free. The tokens were in the journal the whole
+    time; nothing was reading them on this path.
+    """
+    root = tmp_path / "run"
+    config = make_config(turns=10)
+    await empties_after(make_orchestrator(root, config), "p2", calls=4).run()
+    await make_orchestrator(root, config).run(resume=True)
+
+    frames = sorted((root / "bundle" / "turns").glob("*.json"))
+    assert len(frames) == 10
+    # Turn 1 is replayed rather than played, which is the whole point.
+    early = json.loads(frames[0].read_text())
+    assert early["spend"], "a replayed turn came back with no spend at all"
+    assert sum(seat["usd"] for seat in early["spend"].values()) > 0
+
+
+async def test_raising_the_cap_lets_a_capped_match_carry_on(tmp_path: Path) -> None:
+    """The dollar halt is the same shape of stop, and resumable on the same terms.
+
+    Carried-forward spend still arms the cap, so continuing needs a cap above
+    what the match has already spent - raising it is a deliberate act, not a
+    reset.
+    """
+    root = tmp_path / "run"
+    generous = make_config(turns=10, budget_usd=100.0)
+    reference = await make_orchestrator(tmp_path / "reference", generous).run()
+    tight = make_config(turns=10, budget_usd=reference.ledger.spent_usd * 0.5)
+
+    capped = await make_orchestrator(root, tight).run()
+    assert capped.reason == "budget_cap"
+    assert jl.recover(root).resumable
+
+    resumed = await make_orchestrator(root, generous).run(resume=True)
+    assert resumed.state.turn == 10
+    assert resumed.reason == "turn_limit"
+    assert resumed.ledger.spent_usd == pytest.approx(reference.ledger.spent_usd, rel=0.01)
+
+
 async def test_thinking_traces_are_persisted_and_kept_out_of_the_bundle(tmp_path: Path) -> None:
     """The trace is bought on every turn; it should not be thrown away.
 

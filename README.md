@@ -186,6 +186,21 @@ make run ROSTER=shakeout SEED=4
 
 Preflight exists because a match died mid-run when one account ran out of credit, and because two vendors report an exhausted balance as a retryable error.
 
+### If it stops
+
+A match that stops for a reason outside the game - an account that ran dry, or the dollar cap - **halts rather than ends**.
+The board is left coherent and scoreable, every resolved turn is on disk, and the run is resumable once you have fixed the reason:
+
+```bash
+python scripts/run_match.py --roster shakeout --seed 4 --turns 300 --resume output/run-shakeout-4
+```
+
+`run_match` prints that command for you when it halts.
+Resume replays the recorded decisions rather than re-asking the models, so the turns already played are not paid for twice, and it carries the prior spend forward - the cap counts the whole match, not the current process.
+It refuses to resume a match that actually finished.
+
+A match that *won* is over. A match that ran out of money is waiting.
+
 ### The roster
 
 The default roster is the **economy tier from each of the four labs**, chosen so the match is not decided by who bought the biggest model:
