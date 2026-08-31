@@ -23,9 +23,14 @@ nothing. `claude-haiku-4-5` spent 91% of its orders that way across a 128-turn
 match, founded no cities, and was eliminated on turn 35 with every turn recorded
 as a success.
 
-So a discard now buys one correction naming the missing fields. This is the only
-repair loop here that exists for *semantics* rather than for a malformed body,
-and it exists because the silent version cost a civilisation.
+So a discarded *order* now buys one correction naming the missing fields. This is
+the only repair loop here that exists for *semantics* rather than for a malformed
+body, and it exists because the silent version cost a civilisation.
+
+A discarded diplomacy entry does not buy one. It costs a message nobody reads,
+where an order costs the turn, and paying the same round trip for both made the
+Anthropic seat the most expensive on a board it was the cheapest model on. See
+`_worth_repairing`.
 """
 
 from __future__ import annotations
@@ -162,10 +167,26 @@ class Agent:
             # orders this way across a whole match and was eliminated on turn 35
             # while every log said the turn had succeeded.
             #
+            # **A discarded order buys the round trip. A discarded message does
+            # not.** The distinction is the same one `dialects` already makes
+            # and this loop was not reading: `orders` is flattened strictly and
+            # `diplomacy` loosely, precisely because a bare
+            # `{"action": "send_message"}` costs one unsent message while a bare
+            # `{"action": "found_city"}` costs the turn. Triggering on either
+            # priced the cheap failure like the expensive one. Measured over 40
+            # turns of a live baseline: 247 of `claude-haiku-4-5`'s 323 discards
+            # were diplomacy, 22 of its 40 turns dropped nothing else, and the
+            # seat spent 73 calls where every other seat spent 40 - 42% of its
+            # bill on corrections that could not have moved a unit.
+            #
+            # The gate looks only at orders; the message still names every
+            # discard, because once the call is being made anyway the diplomacy
+            # faults are free to carry and the model may as well fix both.
+            #
             # Only worth a round trip while an attempt remains and something
             # survived being asked; a model that returns nothing usable twice is
             # answered by the pass below.
-            if dropped and attempt < MAX_PARSE_ATTEMPTS - 1:
+            if _worth_repairing(dropped) and attempt < MAX_PARSE_ATTEMPTS - 1:
                 faults = "; ".join(why_unusable(d) for d in dropped[:4])
                 last_error = f"{len(dropped)} order(s) discarded - {faults}"
                 prompt = (
@@ -213,6 +234,18 @@ class Agent:
 
     async def aclose(self) -> None:
         await self.client.aclose()
+
+
+def _worth_repairing(dropped: list[dict[str, Any]]) -> bool:
+    """Whether these discards are worth a second request.
+
+    `parse_reporting_drops` tags every discard with the array it came from, so
+    an unusable order and an unsent message are already distinguishable here -
+    the loop simply was not asking. Only the orders justify the call: they are
+    the entries that move the game, and the engine has no other way to hear
+    about them.
+    """
+    return any(d.get("kind") == "orders" for d in dropped)
 
 
 def _estimate_tokens(system: str, user: str) -> int:

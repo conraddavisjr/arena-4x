@@ -890,6 +890,96 @@ async def test_an_unusable_order_earns_one_correction(tmp_path: Path) -> None:
     assert records(tmp_path, jl.PARSE_REPAIRED), "the repair went unrecorded"
 
 
+async def test_an_unsent_message_does_not_buy_a_correction(tmp_path: Path) -> None:
+    """The other half of the trade `dialects` makes, which this loop was not
+    reading.
+
+    `orders` is flattened strictly and `diplomacy` loosely, on the reasoning
+    that a bare `{"action": "send_message"}` costs one unsent message while a
+    bare `{"action": "found_city"}` costs the turn. The repair loop triggered on
+    either, so the cheap failure was priced like the expensive one: over 40
+    turns of a live baseline, 247 of `claude-haiku-4-5`'s 323 discards were
+    diplomacy, 22 of its 40 turns dropped nothing else, and it spent 73 calls
+    where every other seat spent 40.
+
+    A turn whose orders are all usable is a finished turn, however much
+    diplomacy fell off it.
+    """
+    from arena_orchestrator.providers.scripted import ScriptedClient
+
+    good = {
+        "reasoning": {
+            "situation_assessment": "a",
+            "threats_and_opportunities": [],
+            "plan_this_turn": "b",
+        },
+        "dossier": {
+            "doctrine": "",
+            "opponent_models": [],
+            "standing_commitments": [],
+            "lessons": [],
+        },
+        "diplomacy": [],
+        "orders": [{"action": "set_research", "tech": "pottery"}],
+    }
+    chatty = {**good, "diplomacy": [{"action": "send_message"}, {"action": "propose"}]}
+    seen: list[str] = []
+
+    def respond(user: str):
+        seen.append(user)
+        return chatty
+
+    config = make_config(turns=1)
+    orchestrator = make_orchestrator(tmp_path, config, clients={"p1": ScriptedClient(respond)})
+    await orchestrator.run()
+
+    assert len(seen) == 1, "a dropped message must not cost a second request"
+    assert not records(tmp_path, jl.PARSE_REPAIRED), "nothing was repaired"
+
+
+async def test_a_dropped_order_still_reports_the_dropped_messages_with_it(
+    tmp_path: Path,
+) -> None:
+    """The gate is narrower than the message. Once an unusable order has bought
+    the round trip, naming the diplomacy faults alongside it is free, and the
+    model may as well fix both."""
+    from arena_orchestrator.providers.scripted import ScriptedClient
+
+    good = {
+        "reasoning": {
+            "situation_assessment": "a",
+            "threats_and_opportunities": [],
+            "plan_this_turn": "b",
+        },
+        "dossier": {
+            "doctrine": "",
+            "opponent_models": [],
+            "standing_commitments": [],
+            "lessons": [],
+        },
+        "diplomacy": [],
+        "orders": [{"action": "set_research", "tech": "pottery"}],
+    }
+    broken = {
+        **good,
+        "orders": [{"action": "found_city"}],
+        "diplomacy": [{"action": "send_message"}],
+    }
+    seen: list[str] = []
+
+    def respond(user: str):
+        seen.append(user)
+        return broken if len(seen) == 1 else good
+
+    config = make_config(turns=1)
+    orchestrator = make_orchestrator(tmp_path, config, clients={"p1": ScriptedClient(respond)})
+    await orchestrator.run()
+
+    assert len(seen) == 2, "the unusable order should still buy its retry"
+    assert "found_city needs name, unit_id" in seen[1]
+    assert "send_message needs channel, text" in seen[1], "the free half went unsaid"
+
+
 async def test_a_clean_turn_costs_exactly_one_call(tmp_path: Path) -> None:
     """The correction must not fire on turns that were fine - it would double
     the bill and the wall clock of every match for nothing."""
