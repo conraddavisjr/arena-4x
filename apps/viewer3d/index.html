@@ -17,14 +17,37 @@
   :root {
     --bg:#0b0f14; --panel:#12171f; --line:#222a35; --ink:#e6edf3; --dim:#8b949e; --faint:#4d5560;
     --c0:#4ade80; --c1:#fbbf24; --c2:#38bdf8; --c3:#f472b6;
+    /* How tall the bottom drawer is on a phone. Only the narrow layout reads
+       it; the grip rewrites it in px as you drag. */
+    --drawer:46vh;
+    /* The grip's height, shared. The open section headers park below it rather
+       than under it, so the two have to agree to the pixel. */
+    --grip:26px;
   }
   *{box-sizing:border-box}
+  /* `dvh` and not `vh`. A mobile browser counts its own collapsing address bar
+     inside `100vh`, so a viewport-tall page puts its last row underneath the
+     chrome - and the last row here is the scrubber, on a page that cannot
+     scroll to reach it. The `vh` line stays first as the fallback. */
   body{margin:0;background:var(--bg);color:var(--ink);
     font:13px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
-    display:grid;grid-template-columns:minmax(0,1fr) 360px;height:100vh;overflow:hidden}
+    /* 360px is the width the panel was designed at and keeps on any screen
+       with room for it. A phone held sideways is wide enough to stay a two
+       column layout - stacking a drawer under a 390px-tall viewport would
+       leave no board at all - but not wide enough to give 360 of its 780
+       pixels to the panel, so below 1000px the column takes a share instead
+       of a fixed width. */
+    display:grid;grid-template-columns:minmax(0,1fr) clamp(260px,36vw,360px);
+    height:100vh;height:100dvh;overflow:hidden}
+  /* Fills its grid row rather than the viewport: on the narrow layout the row
+     is the screen minus the drawer, and a `100vh` main would push the drawer
+     off the bottom of exactly the screens that need it. */
   main{position:relative;display:flex;flex-direction:column;min-width:0;
-    height:100vh;overflow:hidden}
-  aside{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto}
+    height:100%;overflow:hidden}
+  aside{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;
+    /* Flicking to the end of the panel should not then start dragging the page
+       behind it, which on a phone is how the whole layout jumps. */
+    overscroll-behavior:contain}
   /* min-height:0 is what actually pins the scrubber. Without it a flex child
      refuses to shrink below its content, the stage grows past the viewport and
      pushes the scrubber off the bottom of the screen - which is exactly how it
@@ -81,6 +104,7 @@
   input[type=range]{flex:1;accent-color:#2f6feb}
   .turn{font-variant-numeric:tabular-nums;min-width:96px;color:var(--dim)}
   .hint{position:absolute;bottom:8px;left:14px;color:var(--faint);font-size:11px;z-index:2}
+  .hint.tucked{display:none}
 
   details{border-bottom:1px solid var(--line)}
   details > div{padding:0 14px 12px}
@@ -91,6 +115,17 @@
   summary::before{content:"▸";font-size:11px;color:var(--dim);width:9px}
   details[open] > summary::before{content:"▾"}
   summary:hover{color:var(--ink)}
+  /* Sticky only while the section is open, which is what makes it useful:
+     an open section is the only one with content scrolling underneath that
+     you can lose the heading of. Sticking all eight would spend the top of
+     the drawer on a stack of labels for sections you closed.
+
+     Scoped to its own <details>, so each header leads its section and is
+     pushed out by the next one at the section's bottom edge instead of the
+     headers piling up. It needs the opaque background for the same reason
+     any sticky row does - the rows it passes over would otherwise print
+     straight through the letters. */
+  details[open] > summary{position:sticky;top:0;z-index:4;background:var(--panel)}
   /* The count on a closed section. Empty ones stay quiet rather than showing a
      zero, so the eye only goes to sections with something to say. */
   summary i{font-style:normal;color:var(--faint);font-variant-numeric:tabular-nums;
@@ -229,7 +264,8 @@
   /* Shown and hidden outright, with no fade. A tooltip that animates in is a
      tooltip that is briefly unreadable, and a half-opaque box over a table of
      numbers is worse than no box - the two sets of digits interleave. */
-  #tip{position:fixed;z-index:50;max-width:280px;pointer-events:none;display:none;
+  #tip{position:fixed;z-index:50;max-width:min(280px,calc(100vw - 16px));
+    pointer-events:none;display:none;
     background:#0d1117;border:1px solid #33404f;border-radius:6px;
     padding:7px 9px;font-size:11px;line-height:1.45;color:var(--ink);
     box-shadow:0 6px 20px #000a}
@@ -240,7 +276,7 @@
   .caret{color:var(--faint)}
   #viewMenu{position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:210px;
     background:#0d1117;border:1px solid #33404f;border-radius:8px;padding:5px;
-    box-shadow:0 10px 28px #000b}
+    box-shadow:0 10px 28px #000b;overflow-y:auto}
   #viewMenu .group{font-size:9px;text-transform:uppercase;letter-spacing:.07em;
     color:var(--faint);padding:6px 8px 3px}
   #viewMenu button{display:flex;align-items:center;gap:7px;width:100%;text-align:left;
@@ -344,6 +380,70 @@
   .pact{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#4ade80;
     border:1px solid #245c38;border-radius:3px;padding:1px 5px}
   .pact.lapsed{color:var(--faint);border-color:var(--line)}
+  /* The drawer grip. Absent on a wide screen, where the panel is a column
+     beside the board and there is nothing to trade it against. */
+  #grip{display:none;position:sticky;top:0;z-index:6;flex:0 0 auto;
+    align-items:center;justify-content:center;height:var(--grip);
+    background:var(--panel);border-bottom:1px solid var(--line);
+    cursor:row-resize;user-select:none;
+    /* Without this the browser takes the vertical drag for scrolling the panel
+       and the drawer never moves at all. */
+    touch-action:none}
+  #grip::before{content:"";width:46px;height:4px;border-radius:2px;background:#3d4652}
+  #grip:hover::before{background:#5a6675}
+  #grip.dragging::before,#grip:focus-visible::before{background:#2f6feb}
+  #grip:focus-visible{outline:none}
+
+  /* --- The narrow layout ----------------------------------------------------
+     Below this width a 360px column is most of the screen, so the panel stops
+     being a sidebar and becomes a drawer along the bottom edge: board above,
+     reading below, and a grip between them to say how much of each you want.
+
+     700px is a judgement about the *board*, not about phones. Narrower than
+     this and what is left of a hex map beside a 360px panel is too small to
+     read a tile on, whatever is displaying it - so a half-width desktop window
+     gets the drawer too, and is right to. */
+  @media (max-width: 700px) {
+    body{grid-template-columns:minmax(0,1fr);
+      grid-template-rows:minmax(0,1fr) var(--drawer)}
+    aside{border-left:0;border-top:1px solid var(--line);min-height:0}
+    #grip{display:flex}
+    /* Below the grip, not under it - on this layout the grip is sticky at the
+       top of the same scroller the headers are sticking to. */
+    details[open] > summary{top:var(--grip)}
+    header{padding:8px 10px;gap:8px}
+    .hint{font-size:10px;bottom:6px;left:10px;right:10px}
+    /* Thumb-sized. 5px/10px is a fine mouse target and a poor finger one, and
+       these are the three controls you press over and over. */
+    .scrub{padding:7px 10px;gap:8px}
+    .scrub button{padding:9px 15px;font-size:14px;line-height:1}
+    /* One line. The slider beside it is the flexible thing in this row, so
+       "turn 1 / 108" breaking across two lines only made the bar taller. */
+    .scrub .turn{min-width:0;font-size:12px;white-space:nowrap}
+    input[type=range]{height:30px}
+    /* Full-bleed. A 6vh inset around a dialog that wants every row it can get
+       is a margin with nothing behind it. */
+    #libWrap{padding:0}
+    #lib{max-width:none;max-height:none;height:100dvh;border-radius:0;border:0}
+    #lib header{flex-wrap:wrap}
+    /* Order last so it takes the full second line, and 16px because iOS zooms
+       the whole page in on any focused input smaller than that - which on this
+       page means zooming into a dialog you then cannot get back out of. */
+    #libFind{flex:1 1 100%;order:3;font-size:16px}
+    /* The close button belongs at the far edge, not tucked against the title:
+       with the search field wrapped onto its own line those two were the whole
+       of the first row and sat side by side in the corner. */
+    #libClose{margin-left:auto}
+    /* A date and a seed are nowrap by nature and were taking a third of a
+       390px row for themselves, which left four model names to wrap into
+       three lines each. Below the row instead, where the width is free. */
+    .match{grid-template-columns:26px minmax(0,1fr)}
+    .match .right{grid-column:2;text-align:left;white-space:normal}
+    /* Nine numeric columns will not fit 360px and should not be made to: the
+       table scrolls inside its own section rather than stretching the panel
+       sideways and taking every paragraph with it. */
+    details > div{overflow-x:auto}
+  }
 </style>
 
 <main>
@@ -383,6 +483,12 @@
     still tells you whether there is anything in it - a panel you have to open
     to discover is empty is worse than one always open.
   -->
+  <!-- The drawer handle, and only on the narrow layout. A separator rather
+       than a button because that is what it is: drag it to move the split,
+       arrow it with a keyboard, or tap it to fold the panel away and get the
+       whole screen back for the board. -->
+  <div id="grip" role="separator" aria-orientation="horizontal" tabindex="0"
+       aria-label="Resize panel - drag, or tap to collapse"></div>
   <details open><summary>Empires<i id="n-economy"></i></summary><div id="economy"></div></details>
   <details><summary>Cost<i id="n-cost"></i></summary><div id="cost"></div></details>
   <details open><summary>Reasoning<i id="n-reasoning"></i></summary><div id="reasoning"></div></details>
@@ -466,6 +572,11 @@ controls.maxDistance = 220;
 // back out to where you were looking - every time. With this, pointing at a
 // city and scrolling arrives at that city.
 controls.zoomToCursor = true;
+// One finger orbits, two fingers pinch to zoom and slide to pan. These are the
+// OrbitControls defaults, written out because on a phone they are the entire
+// control scheme rather than a fallback for the mouse - the page should not
+// lose its only way to move the camera to a library default changing.
+controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
 scene.add(new THREE.HemisphereLight(0xbcd7ff, 0x2b2418, 1.5));
 const sun = new THREE.DirectionalLight(0xfff2d8, 2.1);
@@ -548,13 +659,129 @@ function tileAt(key) {
 }
 
 
+// How far back the camera has to sit, relative to a square viewport, for the
+// board to fit. Below an aspect of 1 the *width* is what runs out first, so the
+// camera has to keep backing off as the viewport narrows - which is the same
+// factor the opening shot is framed with, kept as one expression so the two
+// cannot drift apart.
+const fitFactor = () => 1 / Math.min(1, camera.aspect);
+let framedAt = null;
+
 function resize() {
   const { clientWidth: w, clientHeight: h } = stage;
   renderer.setSize(w, h, false);
   camera.aspect = w / Math.max(h, 1);
   camera.updateProjectionMatrix();
+  // Hold the framing across a change of shape. Dragging the drawer up and down
+  // swings the stage between wider-than-tall and much taller than wide, and a
+  // camera framed for one crops the board in the other - collapsing the drawer
+  // to see the map better used to cut both ends of it off. Scaling the distance
+  // the camera already has, rather than assigning one, keeps whatever zoom the
+  // reader chose and moves it to the equivalent place.
+  const want = fitFactor();
+  if (framedAt !== null && Math.abs(want - framedAt) > 1e-6) {
+    const k = want / framedAt;
+    const eye = camera.position.clone().sub(controls.target);
+    camera.position.copy(controls.target).add(eye.multiplyScalar(k));
+    // The fog is tuned in world units around the opening distance, so a camera
+    // that backs off to fit a narrow screen sails into its own haze and the
+    // board comes out grey. Depth cue is a function of how far away the board
+    // is, and the board has not moved - so the fog moves with the camera.
+    scene.fog.near *= k;
+    scene.fog.far *= k;
+    controls.update();
+  }
+  framedAt = want;
+  // A hint that has to sit on top of the board to be read is not a hint. Once
+  // the drawer is up far enough that the stage is a strip, the caption is the
+  // one thing on screen that can be given up.
+  document.querySelector(".hint")?.classList.toggle("tucked", h < 210);
 }
-addEventListener("resize", resize);
+// The stage changes size for reasons the window never hears about - dragging
+// the drawer is the whole point of the drawer, and it never fires a resize
+// event - so watch the element instead. `setSize(w, h, false)` leaves the
+// canvas's CSS size alone, so this cannot feed itself a second callback.
+new ResizeObserver(resize).observe(stage);
+
+/**
+ * The bottom drawer.
+ *
+ * On a narrow screen the board and the panel want the same pixels and there are
+ * only enough for about one of them, so the split is the reader's to make: drag
+ * the grip to any height, or tap it to fold the panel down to nothing and get
+ * the whole screen for the map.
+ *
+ * The height lives in one custom property, which the grid reads as its second
+ * row. Nothing here needs to know anything else about the layout.
+ */
+function drawer() {
+  const grip = $("grip");
+  const aside = document.querySelector("aside");
+  const root = document.documentElement;
+  const narrow = matchMedia("(max-width: 700px)");
+  const PEEK = 26;                          // the grip alone: board full-screen
+  const clamp = (px) => Math.max(PEEK, Math.min(Math.round(innerHeight * 0.85), px));
+  const set = (px) => root.style.setProperty("--drawer", `${clamp(px)}px`);
+  const now = () => aside.getBoundingClientRect().height;
+  let open = null;    // the last height that was not a peek, for the toggle
+  let drag = null;
+
+  const toggle = () => {
+    if (now() <= PEEK + 2) set(open ?? Math.round(innerHeight * 0.46));
+    else { open = now(); set(PEEK); }
+  };
+
+  grip.addEventListener("pointerdown", (e) => {
+    if (e.button) return;
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add("dragging");
+    drag = { y: e.clientY, h: now(), moved: false };
+  });
+  grip.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    // Up is taller: the drawer is anchored to the bottom edge and grows towards
+    // the finger, which is the only direction that reads as dragging *it*.
+    const dy = drag.y - e.clientY;
+    if (Math.abs(dy) > 3) drag.moved = true;
+    if (drag.moved) set(drag.h + dy);
+  });
+  const release = () => {
+    if (!drag) return;
+    // A press that never moved is a tap, and a tap folds.
+    if (!drag.moved) toggle();
+    else if (now() > PEEK + 2) open = now();
+    drag = null;
+    grip.classList.remove("dragging");
+  };
+  grip.addEventListener("pointerup", release);
+  grip.addEventListener("pointercancel", release);
+  grip.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 96 : 24;
+    if (e.key === "ArrowUp") { set(now() + step); e.preventDefault(); }
+    else if (e.key === "ArrowDown") { set(now() - step); e.preventDefault(); }
+    else if (e.key === "Enter" || e.key === " ") { toggle(); e.preventDefault(); }
+  });
+  // Turning the phone sideways changes what 85% of the screen means, and a
+  // drawer left taller than the new screen leaves no board above it at all.
+  addEventListener("resize", () => {
+    if (narrow.matches && root.style.getPropertyValue("--drawer")) set(now());
+  });
+}
+drawer();
+
+// Touch has no scroll wheel and no right button, and naming gestures the reader
+// does not have is worse than saying nothing.
+if (matchMedia("(pointer: coarse)").matches) {
+  document.querySelector(".hint").textContent =
+    "drag to orbit \u00b7 pinch to zoom \u00b7 two fingers to pan";
+}
+// An instruction that stays after it has been followed is decoration, and on a
+// phone it is decoration lying across the board - zoom in once and the caption
+// is sitting in the middle of the map it was explaining. Gone on first use, and
+// gone for the session: nobody needs telling twice how to drag.
+renderer.domElement.addEventListener("pointerdown", () => {
+  document.querySelector(".hint")?.remove();
+}, { once: true });
 
 (function loop() {
   requestAnimationFrame(loop);
@@ -2243,7 +2470,7 @@ function tooltips(root) {
   if (!res.ok) {
     document.querySelector("aside").hidden = true;
     document.querySelector(".scrub").hidden = true;
-    document.querySelector(".hint").hidden = true;
+    document.querySelector(".hint")?.remove();
     $("status").textContent = "Pick a match";
     wireLibrary();
     openLibrary(true);
@@ -2269,7 +2496,7 @@ function tooltips(root) {
   // Fit the wider of the two axes, allowing for the viewport being wider than
   // it is tall, then back off a little so the board is not flush to the frame.
   const vFov = (camera.fov * Math.PI) / 180;
-  const fit = extent / (2 * Math.tan(vFov / 2) * Math.min(1, camera.aspect)) * 1.15;
+  const fit = extent / (2 * Math.tan(vFov / 2)) * fitFactor() * 1.15;
   // The opening camera, kept so "Reset view" can return to it exactly. Now that
   // zooming follows the cursor it is very easy to end up somewhere odd, and
   // "back to how it looked" needs to be one click rather than a hunt.
@@ -2310,6 +2537,16 @@ function tooltips(root) {
     const open = $("viewMenu").hidden;
     $("viewMenu").hidden = !open;
     $("viewBtn").setAttribute("aria-expanded", String(open));
+    // The menu hangs inside the stage, and the stage clips. On a phone with the
+    // drawer up there is not 300px of stage to hang it in, and the bottom of
+    // the list - the two camera commands - was being cut off with nothing to
+    // say so. Measured on open rather than guessed, because how much room there
+    // is depends on where the reader last left the drawer.
+    if (open) {
+      const room = stage.getBoundingClientRect().bottom
+                 - $("viewMenu").getBoundingClientRect().top - 8;
+      $("viewMenu").style.maxHeight = `${Math.max(140, room)}px`;
+    }
   };
   // Dismissed by clicking anywhere else or by Escape. Both, because a menu that
   // can only be closed by the button that opened it is a trap on a page whose
@@ -2354,6 +2591,14 @@ function tooltips(root) {
   });
   aside.addEventListener("mouseout", (ev) => {
     if (ev.target.closest(".ref[data-tile]")) clearPointer();
+  });
+  // Touch has no hover, so the same pill answers a tap: it marks the tile and
+  // stays marked, because there is no "out" to clear it on. The next tap
+  // anywhere in the panel takes the mark away again.
+  aside.addEventListener("click", (ev) => {
+    const ref = ev.target.closest(".ref[data-tile]");
+    if (ref) pointAt(+ref.dataset.tile);
+    else clearPointer();
   });
   aside.addEventListener("scroll", clearPointer, true);
   wireLibrary();
