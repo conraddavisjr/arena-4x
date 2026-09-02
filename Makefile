@@ -130,8 +130,12 @@ library:  ## Browse every match played so far. make library
 	@echo "library: http://localhost:$(PORT)/world.html"
 	@$(PY) -m http.server $(PORT) --bind 127.0.0.1 --directory $(or $(ROOT),output)
 
+# `cp -R src/. dest/` and not `cp -r src dest`: the second form copies the
+# directory *into* dest once dest exists, so every restage buried another
+# vendor/ inside the last one. Idempotent now, first stage or fiftieth.
 stage3d:
-	@cp -r apps/viewer3d/vendor $(or $(MATCH),output/match-4)/vendor
+	@mkdir -p $(or $(MATCH),output/match-4)/vendor
+	@cp -R apps/viewer3d/vendor/. $(or $(MATCH),output/match-4)/vendor/
 	@cp apps/viewer3d/world.js $(or $(MATCH),output/match-4)/world.js
 	@cp apps/viewer3d/index.html $(or $(MATCH),output/match-4)/world.html
 	@cp apps/viewer3d/models.html $(or $(MATCH),output/match-4)/models.html
